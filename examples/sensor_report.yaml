@@ -1,0 +1,10 @@
+name: SensorReport
+description: Periodic report sent by the sensor node.
+endian: little
+fields:
+  - {name: id, type: u16, description: Node identifier}
+  - {name: temperature, type: f32, unit: degC, description: Board temperature}
+  - {name: ok, type: bool, description: Self-test passed}
+  - {name: label, type: string, length: 8, description: Short node name}
+  - {name: samples, type: i16, count: 4, description: Latest raw ADC samples}
+  - {name: blob, type: bytes, length: 2}

@@ -1,0 +1,6 @@
+name: PowerReport
+description: Status packet reporting the node's power state.
+endian: little
+fields:
+  - {name: mode, type: string, length: 8, description: "Device's current state name"}
+  - {name: temperature, type: f32, unit: degC, description: Board temperature}

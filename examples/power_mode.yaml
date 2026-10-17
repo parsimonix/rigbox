@@ -1,0 +1,23 @@
+name: PowerMode
+description: Power states of the sensor node.
+initial: idle
+state_field: mode          # packet field holding the device's own state (see power_report.yaml)
+states:
+  - {name: idle, safe: true, description: "Output off, waiting"}
+  - {name: running}
+  - {name: fault, description: Output disabled after overheat}
+events:
+  - {name: start}
+  - {name: stop}
+  - {name: reset}
+  - {name: overheat, match: "temperature > 80"}    # derived from packets during replay
+  - {name: cooled, match: "temperature < 60"}
+invariants:                # checked by sm.fuzz after every step
+  - 'event != "overheat" or temperature <= 90 or prev_state != "running" or state == "fault"'
+  - 'event != "start" or prev_state != "fault" or not fired'
+transitions:
+  - {from: idle, event: start, to: running, actions: [enable_output]}
+  - {from: running, event: stop, to: idle, actions: [disable_output]}
+  - {from: running, event: overheat, to: fault, guard: "temperature > 90", actions: [disable_output]}
+  - {from: fault, event: cooled, to: idle}
+  - {from: fault, event: reset, to: idle}

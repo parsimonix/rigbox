@@ -1,0 +1,9 @@
+name: LowPass1k
+description: 4th-order Butterworth low-pass for anti-aliasing before decimation.
+kind: iir
+response: lowpass
+design: butterworth
+order: 4
+fs: 48000
+cutoff: 1000
+numeric: q15
