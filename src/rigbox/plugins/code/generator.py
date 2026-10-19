@@ -19,9 +19,9 @@ class CodeGenerator:
     """Render registered built-in templates and publish their output to files."""
 
     def __init__(self) -> None:
-        """Create a strict Jinja environment rooted at the codegen package."""
+        """Create a strict Jinja environment rooted at the code package."""
         self._builtin_env = Environment(
-            loader=PackageLoader("rigbox.plugins.codegen", package_path=""),
+            loader=PackageLoader("rigbox.plugins.code", package_path=""),
             autoescape=False,
             trim_blocks=True,
             lstrip_blocks=True,

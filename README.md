@@ -53,7 +53,7 @@ See each plugin's README for commands, examples and behavior:
 - [Manifests](src/rigbox/plugins/manifests/README.md)
 - [Devices and transports](src/rigbox/plugins/device/README.md)
 - [State machines](src/rigbox/plugins/statemachine/README.md)
-- [Code generation](src/rigbox/plugins/codegen/README.md)
+- [Code generation](src/rigbox/plugins/code/README.md)
 - [DSP](src/rigbox/plugins/dsp/README.md)
 - [Built-in utilities and adding plugins](src/rigbox/plugins/README.md)
 

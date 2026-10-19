@@ -33,6 +33,7 @@ class CStateMachineContext:
     states: tuple[CEnumMember, ...]
     events: tuple[CEnumMember, ...]
     transitions: tuple[Transition, ...]
+    errors: tuple[str, ...]
     constants: dict[str, str]
 
 
@@ -98,6 +99,7 @@ def c_state_machine_context(spec: MachineSpec) -> CStateMachineContext:
         null_event_symbol=null_event_symbol,
         states=states,
         events=events,
+        errors=tuple(spec.errors),
         max_actions=spec.max_actions,
         transitions=tuple(spec.transitions),
         constants={f"{machine}_{key.upper()}": value for key, value in spec.constants.items()},

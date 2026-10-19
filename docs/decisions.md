@@ -162,10 +162,14 @@ Prompted by comparing with the SMAL project's cmd2-based REPL, then a throwaway 
 
 ## Code generation decisions
 
-- **First slice:** `codegen.state_machine` emits a C header with declaration-order state and event enums. The template
+- **First slice:** `code.generate c-state-machine-header` emits a C header with declaration-order state and event enums. The template
   receives a small immutable C context built from the validated `MachineSpec`; it does not inspect the schema model
-  directly. Transition execution, guard evaluation, action implementations, custom templates, and other targets are
+  directly. Transition execution, guard evaluation, action implementations, and other targets are
   deferred until there is a concrete need.
+- **Source validation:** built-in template definitions declare an optional `source_validator`; the YAML command boundary
+  runs it before context construction (the C state-machine template uses `MachineSpec.model_validate`).
+  External templates receive raw YAML as `context`, without model guessing. Lookup fallback only handles unknown
+  built-in names; validation and rendering errors are reported without retrying as external files.
 - **Rendering and writes:** Jinja2 uses `StrictUndefined`, package-resource templates, and reusable macros. Output is
   rendered before writing, published atomically, and never overwrites an existing file without `--force`. Package data
   explicitly includes the `.j2` files.

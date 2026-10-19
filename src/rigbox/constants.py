@@ -84,6 +84,6 @@ class Plugins:
         f"{ENTRYPOINT_GROUP}.manifests.commands",
         f"{ENTRYPOINT_GROUP}.device.commands",
         f"{ENTRYPOINT_GROUP}.statemachine.commands",
-        f"{ENTRYPOINT_GROUP}.codegen.commands",
+        f"{ENTRYPOINT_GROUP}.code.commands",
         f"{ENTRYPOINT_GROUP}.dsp.commands",
     )

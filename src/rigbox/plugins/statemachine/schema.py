@@ -93,6 +93,7 @@ class MachineSpec(BaseModel):
     state_field: str | None = Field(None, description="Packet field holding the device's own state name (replay)")
     states: list[State] = Field(min_length=1)
     events: list[Event] = Field(min_length=1)
+    errors: list[str] = Field(default_factory=list, description="Names of errors reported by the state machine")
     transitions: list[Transition] = Field(default_factory=list)
     constants: dict[str, str] = Field(
         default_factory=dict,

@@ -17,7 +17,10 @@ Context = TypeVar("Context")
 
 @dataclass(frozen=True)
 class Template(Generic[Source, Context]):
-    """Describe one template and how to build its rendering context."""
+    """Describe a template, its context builder, and optional raw-input validation.
+
+    Command input loaders use the validator; renderers still accept validated sources.
+    """
 
     name: str
     template_path: str
@@ -25,6 +28,7 @@ class Template(Generic[Source, Context]):
     output_extension: str
     description: str
     context_builder: Callable[[Source], Context] | None
+    source_validator: Callable[[object], Source] | None = None
 
 
 C_STATE_MACHINE_HEADER = Template[MachineSpec, CStateMachineContext](
@@ -34,6 +38,7 @@ C_STATE_MACHINE_HEADER = Template[MachineSpec, CStateMachineContext](
     output_extension=".h",
     description="Declare a machine's states and events in a C header.",
     context_builder=c_state_machine_context,
+    source_validator=MachineSpec.model_validate,
 )
 
 BUILTIN_TEMPLATES: dict[str, Template[MachineSpec, CStateMachineContext]] = {

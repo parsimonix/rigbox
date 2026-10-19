@@ -14,7 +14,7 @@ rigbox run sm.simulate examples\power_mode.yaml "[start, {overheat: {temperature
 rigbox run sm.replay examples\power_mode.yaml captures\run1.ndjson --only-problems
 ```
 
-For C state and event enum headers, see the [code generation plugin](../codegen/README.md).
+For C state and event enum headers, see the [code generation plugin](../code/README.md).
 
 `sm.check` returns a `findings` list whose entries contain `level`, `rule`, `subject`, and `message`. If there are none,
 the list is empty and human output reports success (green in Rich mode). It ignores guards: a path or

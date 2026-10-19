@@ -36,7 +36,7 @@ rigbox = "rigbox.cli:cli"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"rigbox.plugins.codegen" = ["macros/**/*.j2", "templates/**/*.j2"]
+"rigbox.plugins.code" = ["macros/**/*.j2", "templates/**/*.j2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
