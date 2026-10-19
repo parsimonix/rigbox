@@ -1,0 +1,146 @@
+name: Continuous Delivery
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Create GitHub App Token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.PARSIMONIX_RELEASEBOT_APP_ID }}
+          private-key: ${{ secrets.PARSIMONIX_RELEASEBOT_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          fetch-tags: true
+          token:  ${{ steps.app-token.outputs.token }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Detect next version
+        id: version
+        env:
+          GH_TOKEN: "none"  # Prevent accidental pushes during detection
+        run: uvx --from python-semantic-release==10.6.1 --with "gitpython<3.1.60" semantic-release -v version --no-changelog --no-commit --no-tag
+
+      - name: Build Python distributions
+        run: uv build -o dist --clear
+
+      - name: Upload Distribution Artifacts
+        if: ${{ steps.version.outputs.released == 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Upload Lock File Artifact
+        if: ${{ steps.version.outputs.released == 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: uv.lock
+          path: uv.lock
+          if-no-files-found: error
+          retention-days: 2
+
+    outputs:
+      new-release-detected: ${{ steps.version.outputs.released }}
+      new-release-version: ${{ steps.version.outputs.version }}
+      new-release-tag: ${{ steps.version.outputs.tag }}
+      distribution-artifacts: dist
+      lock-file-artifact: uv.lock
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ needs.build.outputs.new-release-detected == 'true' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub App Token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.PARSIMONIX_RELEASEBOT_APP_ID }}
+          private-key: ${{ secrets.PARSIMONIX_RELEASEBOT_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token:  ${{ steps.app-token.outputs.token }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ needs.build.outputs.distribution-artifacts }}
+          path: dist
+
+      - name: Download Lock File Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ needs.build.outputs.lock-file-artifact }}
+
+      - name: Stage Lock File for commit
+        run: git add uv.lock
+
+      - name: Create and publish release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }} 
+        run: |
+          uvx --from python-semantic-release==10.6.1 --with "gitpython<3.1.60" semantic-release -v --strict version
+          uvx --from python-semantic-release==10.6.1 --with "gitpython<3.1.60" semantic-release publish
+
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      new-release-version: ${{ steps.release.outputs.version }}
+      new-release-tag: ${{ steps.release.outputs.tag }}
+
+  deploy:
+    name: Deploy to PyPI
+    runs-on: ubuntu-latest
+    needs: release
+    if: ${{ needs.release.outputs.released == 'true' }}
+    environment:
+      name: pypi
+      url: https://pypi.org
+    permissions:
+      id-token: write
+    steps:
+      - name: Download Distribution Artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ needs.build.outputs.distribution-artifacts }}
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          print-hash: true
+          verbose: true

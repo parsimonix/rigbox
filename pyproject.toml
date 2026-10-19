@@ -5,8 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rigbox"
 version = "0.1.0"
-description = "Embedded/DSP developer's toolbox: a manifest-driven REPL and CLI."
+description = "Embedded developer's toolbox: a manifest-driven REPL and CLI."
+readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "Jonathan Bailey", email = "jonathan.bailey@comcast.net" }
+]
 dependencies = [
     "cmd2>=4.3,<5",
     "construct>=2.10",
