@@ -82,9 +82,11 @@ def test_generate_external_template_receives_raw_manifest(tmp_path: Path, manife
     rigbox_register(registry)
     ctx = Context(registry=registry)
 
-    ctx.run("code.generate", {"template": str(template_path), "manifest": str(source), "out": str(output)})
+    result = ctx.run("code.generate", {"template": str(template_path), "manifest": str(source), "out": str(output)})
 
     assert output.read_text(encoding="utf-8") == expected
+    assert result.structured_data == {"written": str(output)}
+    assert result.text == f"Generated code written to '{output}'"
 
 
 @pytest.mark.parametrize(

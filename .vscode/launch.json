@@ -15,7 +15,7 @@
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             },
-            "args": ["run", "codegen.state_machine", "examples\\power_mode.yaml"],
+            "args": ["run", "code.generate", "c-state-machine-header", "examples\\generated_code.h", "examples\\power_mode.yaml"],
             "console": "integratedTerminal",
             "justMyCode": true
         }

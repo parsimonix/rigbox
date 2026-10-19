@@ -77,6 +77,7 @@ class Transition(BaseModel):
     target: str = Field(alias="to")
     guard: str | None = Field(None, description="Expression over the event's data; must be true to fire")
     actions: list[str] = Field(default_factory=list, description="Labels reported when the transition fires")
+    on_enter: str | None = Field(None, description="Action to execute upon entering the target state, if any")
 
     valid_guard = field_validator("guard")(_check_expression)
 

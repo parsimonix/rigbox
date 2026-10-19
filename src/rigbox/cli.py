@@ -11,7 +11,7 @@ from rigbox.constants import RenderFormat, RenderLevel
 from rigbox.core.context import Context
 from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry, UsageError
-from rigbox.core.render import RigboxCmdResult
+from rigbox.core.render import RenderError, RigboxCmdResult
 from rigbox.core.workspace import Workspace
 
 cli = typer.Typer()
@@ -89,14 +89,14 @@ def run(
     ctx = _build_context(workspace, fmt)
     try:
         response = ctx.run_tokens(tokens)
+        out = response.render(fmt)
     except UsageError as e:
         raise typer.Exit(code=e.exit_code) from e
-    except CommandError as e:
-        typer.echo(RigboxCmdResult(text=str(e), level=RenderLevel.ERROR), err=True)
+    except (CommandError, RenderError) as e:
+        typer.echo(RigboxCmdResult(text=str(e), level=RenderLevel.ERROR).render(RenderFormat.PLAINTEXT), err=True)
         raise typer.Exit(code=1) from e
     finally:
         ctx.close()
-    out = response.render(fmt)
     if out:
         typer.echo(out)
     raise typer.Exit(code=0)
@@ -125,14 +125,14 @@ def script(
     ctx = _build_context(workspace, fmt)
     try:
         response = ctx.run("workflow.run", {"workflow": str(file), "var": var or []})
+        out = response.render(fmt)
     except UsageError as e:
         raise typer.Exit(code=e.exit_code) from e
-    except CommandError as e:
-        typer.echo(RigboxCmdResult(text=str(e), level=RenderLevel.ERROR), err=True)
+    except (CommandError, RenderError) as e:
+        typer.echo(RigboxCmdResult(text=str(e), level=RenderLevel.ERROR).render(RenderFormat.PLAINTEXT), err=True)
         raise typer.Exit(code=1) from e
     finally:
         ctx.close()
-    out = response.render(fmt)
     if out:
         typer.echo(out)
     raise typer.Exit(code=0)

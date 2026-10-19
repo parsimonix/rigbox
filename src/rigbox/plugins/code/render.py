@@ -91,7 +91,7 @@ def c_state_machine_context(spec: MachineSpec) -> CStateMachineContext:
     return CStateMachineContext(
         name=spec.name,
         version=spec.version,
-        header_guard=f"{machine}_STATE_MACHINE_H",
+        header_guard=f"{machine}_STATE_MACHINE_H".upper(),
         state_type=f"{machine}_state_t",
         event_type=f"{machine}_event_t",
         state_count_symbol=state_count_symbol,
@@ -102,5 +102,5 @@ def c_state_machine_context(spec: MachineSpec) -> CStateMachineContext:
         errors=tuple(spec.errors),
         max_actions=spec.max_actions,
         transitions=tuple(spec.transitions),
-        constants={f"{machine}_{key.upper()}": value for key, value in spec.constants.items()},
+        constants={f"{machine}_{key}".upper(): value for key, value in spec.constants.items()},
     )

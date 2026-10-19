@@ -81,4 +81,4 @@ def rigbox_register(registry: Registry) -> None:
                 generator.render_to_file(external_definition, manifest_data, args.out, force=args.force, template=jinjatempl)
         except OSError as error:
             raise CommandError(f"cannot write generated code '{args.out}': {error}") from None
-        return RigboxCmdResult(text=f"Generated code written to '{args.out}'")
+        return RigboxCmdResult(text=f"Generated code written to '{args.out}'", structured_data={"written": str(args.out)})

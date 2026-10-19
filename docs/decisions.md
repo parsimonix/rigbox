@@ -205,11 +205,13 @@ Prompted by comparing with the SMAL project's cmd2-based REPL, then a throwaway 
 
 ## Supporting decisions
 
-- **Result contract:** handlers may return `RigboxResponse`, `HumanReadableResponse`, or legacy model/dict/list/None
-  results. Dispatch returns a `RigboxResponse` with JSON-compatible rows and an optional human message. Workflows
-  preserve the final step's complete response. Human-only responses produce no structured rows.
-- **Output format `auto`:** human on a TTY, NDJSON when piped. Human mode uses the explicit message or falls back to
-  a table; explicit table/JSON/NDJSON modes use structured data only. Diagnostics remain on stderr.
+- **Result contract:** dispatch normalizes text, structured data, Rich renderables, and empty results into
+  `RigboxCmdResult`. Handlers can supply multiple representations; commands reporting file creation include
+  a human message and a structured `written` path.
+- **Output format `auto`:** Rich on a TTY, NDJSON when piped. Rich prefers its explicit renderable, then text,
+  then a structured-data table. Plaintext prefers text, then a structured-data table, then an unstyled Rich
+  renderable. JSON/NDJSON never fall back to human content: human-only results raise `RenderError`, reported on
+  stderr by CLI, scripts and REPL. Empty results produce `[]` or no NDJSON records without warnings.
 - **Workspace file:** `rigbox.yaml` (YAML, for consistency with manifests; chosen when we targeted Python 3.10
   which has no `tomllib`, and kept after moving to 3.11). Runtime state lives in
   `.rigbox/` (history, REPL history) and should be git-ignored.

@@ -14,7 +14,6 @@ import shutil
 import sys
 from dataclasses import dataclass
 from typing import Any, Self, TextIO
-from warnings import warn
 
 from pydantic import BaseModel
 from rich.console import Console, ConsoleRenderable, RenderableType, RichCast
@@ -22,6 +21,10 @@ from rich.table import Table
 from rich.text import Text
 
 from rigbox.constants import RenderFormat, RenderLevel
+
+
+class RenderError(ValueError):
+    """Report that a command result cannot satisfy the requested output format."""
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class RigboxCmdResult:
             stream (TextIO | None, optional): The output stream to which the rendered content will be written. Defaults to None, which uses sys.stdout.
 
         Raises:
+            RenderError: If machine-readable output is requested for a human-only result.
             RuntimeError: If the resolved format is unexpected or unsupported.
 
         Returns:
@@ -83,29 +87,41 @@ class RigboxCmdResult:
         fmt = resolve_render_format(fmt, stream=stream)
         match fmt:
             case RenderFormat.PLAINTEXT:
-                if self.text is None:
-                    warn("No plaintext available for rendering.", stacklevel=1)
-                    return ""
-                return normalize_text(self.text, level=self.level, stream=stream)
+                if self.text is not None:
+                    return normalize_text(self.text, level=self.level, stream=io.StringIO())
+                if self.structured_data is not None:
+                    return _render_data_table(self.structured_data, stream=io.StringIO())
+                if self.rich_data is not None:
+                    return normalize_rich_renderable(self.rich_data, stream=io.StringIO())
+                return ""
             case RenderFormat.RICH:
-                if self.rich_data is None:
-                    warn("No rich data available for rendering.", stacklevel=1)
-                    return ""
-                return normalize_rich_renderable(self.rich_data, stream=stream)
-            case RenderFormat.JSON:
+                if self.rich_data is not None:
+                    return normalize_rich_renderable(self.rich_data, stream=stream)
+                if self.text is not None:
+                    return normalize_text(self.text, level=self.level, stream=stream)
+                return _render_data_table(self.structured_data, stream=stream)
+            case RenderFormat.JSON | RenderFormat.NDJSON:
+                if self.structured_data is None and (self.text is not None or self.rich_data is not None):
+                    raise RenderError(f"Cannot render {fmt}: this command result has no structured data.")
                 rows = normalize_structured_data(self.structured_data)
-                if not rows:
-                    warn("No structured data available for rendering as JSON.", stacklevel=1)
-                    return "[]"
-                return json.dumps(rows, indent=2)
-            case RenderFormat.NDJSON:
-                rows = normalize_structured_data(self.structured_data)
-                if not rows:
-                    warn("No structured data available for rendering as NDJSON.", stacklevel=1)
-                    return ""
+                if fmt == RenderFormat.JSON:
+                    return json.dumps(rows, indent=2)
                 return "\n".join(json.dumps(r) for r in rows)
             case _:
                 raise RuntimeError(f"unexpected format after resolution: {fmt}")
+
+
+def _render_data_table(data: object, stream: TextIO) -> str:
+    rows = normalize_structured_data(data)
+    if not rows:
+        return ""
+    columns = list(dict.fromkeys(key for row in rows for key in row))
+    table = Table()
+    for column in columns:
+        table.add_column(Text(column))
+    for row in rows:
+        table.add_row(*(Text(str(row.get(column, ""))) for column in columns))
+    return normalize_rich_renderable(table, stream=stream)
 
 
 def normalize_structured_data(result: object) -> list[dict[str, Any]]:
@@ -136,7 +152,7 @@ def normalize_rich_renderable(rich_renderable: RenderableType, stream: TextIO | 
         stream (TextIO | None, optional): The output stream used to detect terminal color support. Defaults to None.
 
     Returns:
-        str: The rendered string representation of the Rich renderable object.
+        The rendered string without the console-added final newline; callers terminate the output.
     """
     stream = stream if stream is not None else sys.stdout
     color_enabled = is_color_enabled(stream)
@@ -147,7 +163,7 @@ def normalize_rich_renderable(rich_renderable: RenderableType, stream: TextIO | 
         color_system="auto" if color_enabled else None,
         force_terminal=color_enabled,
     ).print(rich_renderable)
-    return buffer.getvalue()
+    return buffer.getvalue().removesuffix("\n")
 
 
 def normalize_text(raw_text: str, level: RenderLevel = RenderLevel.default(), stream: TextIO | None = None) -> str:

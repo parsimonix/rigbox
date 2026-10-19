@@ -15,6 +15,6 @@ typedef struct
     /* The state which the table entry places the state machine in after executing it's action(s). */
     {{ context.name | lower }}_state_t tgt;
     /* The event to handle upon entering tgt, if any. */
-    {{ context.name | lower }}_event_t tgt_entry_evt;
+    {{ context.name | lower }}_action_t on_enter;
 } {{ context.name | lower }}_state_table_entry_t;
 {% endmacro %}

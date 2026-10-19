@@ -2,8 +2,8 @@
 typedef enum
 {
 {% for state in context.states %}
-    {{ state.symbol }} = {{ state.value }},
+    {{ state.symbol | upper }} = {{ state.value }},
 {% endfor %}
-    {{ context.state_count_symbol }},
+    {{ context.state_count_symbol | upper }},
 } {{ context.state_type }};
 {% endmacro %}

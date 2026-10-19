@@ -12,6 +12,7 @@ from rigbox.constants import AppFiles, AppMetadata, RenderFormat
 from rigbox.core.cli_parser import parser_for
 from rigbox.core.context import Context
 from rigbox.core.registry import Command, CommandError
+from rigbox.core.render import RenderError
 
 
 class RigboxShell(cmd2.Cmd):
@@ -66,10 +67,10 @@ class RigboxShell(cmd2.Cmd):
         self.ctx.output_stream = self.stdout
         try:
             response = self.ctx.run(name, raw_args)
-        except CommandError as e:
+            text = response.render(self.format, stream=self.stdout)
+        except (CommandError, RenderError) as e:
             self.perror(f"error: {e}")
             return
-        text = response.render(self.format, stream=self.stdout)
         if text:
             self.poutput(text)
 

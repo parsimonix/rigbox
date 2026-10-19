@@ -2,9 +2,9 @@
 typedef enum
 {
 {% for event in context.events %}
-    {{ event.symbol }} = {{ event.value }},
+    {{ event.symbol | upper }} = {{ event.value }},
 {% endfor %}
-    {{ context.event_count_symbol }},
-    {{ context.null_event_symbol }},
+    {{ context.event_count_symbol | upper }},
+    {{ context.null_event_symbol | upper }},
 } {{ context.event_type }};
 {% endmacro %}

@@ -9,9 +9,9 @@ static const {{ context.name | lower }}_state_table_entry_t {{ context.name | lo
     "{" ~ ((t.actions + ["NULL"]) | join(', ')) ~ "}, " ~
     (context.name | upper) ~ "_STATE_" ~ (t.target | upper) ~ ", " ~
     (
-        (context.name | upper) ~ "_EVENT_" ~ (t.tgt_entry_evt | upper)
-        if t.tgt_entry_evt
-        else (context.name | upper) ~ "_EVENT_NULL"
+        t.on_enter
+        if t.on_enter
+        else "NULL"
     ) ~
     "},"
 ) | indent(4, true) }}

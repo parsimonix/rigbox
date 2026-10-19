@@ -26,7 +26,10 @@ rigbox script workflows\x.yaml --var key=value
 ```
 
 Output is a human message (or a table for data-only commands) on a terminal and NDJSON when piped.
-Select `--format human`, `table`, `json`, or `ndjson` explicitly when needed.
+Select `--format plaintext`, `rich`, `json`, or `ndjson` explicitly when needed.
+Human formats fall back to available text or a table of structured data; plaintext output omits styling.
+JSON and NDJSON never fall back to human text: human-only results produce an explicit error.
+Empty results produce `[]` in JSON or no NDJSON records, without warnings.
 
 ### The shell
 
@@ -36,7 +39,7 @@ commands work too:
 
 ```shell
 rigbox> help                           # commands grouped by area; `help commands` or `commands --help` for one
-rigbox> set format json                # print results as JSON (human, table, json, ndjson, auto)
+rigbox> set format json                # print results as JSON (plaintext, rich, json, ndjson, auto)
 rigbox> alias create list commands     # then: list
 rigbox> commands | findstr workspace   # pipe to a shell command
 rigbox> commands > commands.txt        # redirect to a file
