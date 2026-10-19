@@ -1,6 +1,6 @@
 # rigbox
 
-A manifest-driven REPL and CLI toolbox for embedded and DSP developers.
+A manifest-driven REPL and CLI toolbox for embedded developers.
 
 ## Setup
 
