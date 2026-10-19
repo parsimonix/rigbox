@@ -21,9 +21,11 @@ Use established packages for non-core functionality; keep any home-grown layer a
 | Numerics / DSP | `numpy`, `scipy.signal` (filter design, resampling, spectra), `scipy.io.wavfile` | Adopted. Only gaps filled by us: Q-format quantization, CMSIS layout, resource estimate |
 | Plots | `matplotlib` | Optional extra (`rigbox[plot]`), imported lazily, Agg backend (PNG files only) |
 | State machine engine | `transitions` (pytransitions, MIT) | Adopted. `plugins/statemachine/engine.py` builds a Machine from the manifest |
+| State machine graph analysis | `networkx` (NetworkX Developers, BSD-3-Clause) | Adopted. Shared `MultiDiGraph` indexes and established reachability / strongly connected component algorithms; no custom graph engine |
 | Guard/match expressions | `simpleeval` (MIT) | Adopted. Safe expression evaluation, no arbitrary code |
 | Serial / transports | `pyserial` (Chris Liechti, BSD) | Adopted. Its URL handlers give us `loop://` (mock) and `socket://` for free |
 | Table output | `rich` (Will McGugan, MIT) | Adopted behind `render()` in `core/render.py` |
+| Code templates | `jinja2` (Pallets, BSD-3-Clause) | Already a dependency; use strict packaged templates with typed contexts for generated source |
 
 Audit of remaining home-grown core (recommendations, not yet applied):
 
@@ -78,19 +80,37 @@ Prompted by comparing with the SMAL project's cmd2-based REPL, then a throwaway 
   URL scheme -> factory registered on the `Registry` (`add_transport`, `open_transport`), so any plugin can add a kind of
   device from its `rigbox_register` hook. URLs without `://` mean `serial`. pyserial is one implementation
   (`serial`, `loop`, `socket`, `rfc2217`); `replay://<capture.ndjson>` is a second, which doubles as proof that the interface
-  is not pyserial-shaped. `Connection` is now a named wrapper (name, url, options, transport). Prompted by looking at the
-  SMAL project's device-agnostic `ConnectedDevice` protocol and user-supplied connect function.
-  - Factories take `(url, TransportOptions)`; options carry `timeout`, `baud` (serial only) and free-form `--param
-    key=value` pairs, so a transport needing more settings needs no core change.
+  is not pyserial-shaped. `Connection` owns the named session (name, url, options, transport). Prompted by looking at
+  the SMAL project's device-agnostic protocol, then the Bose communications library's transport/session layering.
+  - Factories take `(url, TransportOptions)`; options carry `timeout`, optional `write_timeout`, `baud` (serial only)
+    and free-form `--param key=value` pairs, so a transport needing more settings needs no new core abstraction.
   - A finished stream raises `EOFError` instead of timing out, so `device.capture` stops and `device.expect` says
-    "stream ended" rather than waiting. Live devices never raise it.
+    "stream ended" rather than waiting. Communication failures raise `OSError`; read timeouts return empty bytes.
+    A successful write accepts all bytes, not a silent short write or a remote acknowledgement.
   - Unexpected factory exceptions are wrapped as `CommandError("cannot open ...")`.
   - Still deferred: scripted mock devices, SWD/BLE/CAN transports (now just plugins), framing.
 - **Connections:** named, held on `Context.connections`, closed by `Context.close()` (CLI `finally`, REPL exit).
   They last for a REPL session or one workflow run; `rigbox run device.connect ...` alone is pointless.
-  Workspace device profiles are deferred.
-- **Framing:** none. A packet read is "exactly manifest.size (or `--size`) bytes within the timeout". COBS/SLIP/
-  length-prefix framing is deferred.
+  `Connection` serializes I/O with a reentrant lock, bounds lock acquisition, assembles partial reads within one
+  deadline, and translates expected I/O failures to `CommandError`. `read` may return partial packets for capture;
+  `read_exactly` reports partial data and distinguishes timeout from EOF. No cross-call partial-packet buffer.
+  Closing is idempotent (a failed close may be retried); Python context-manager cleanup preserves the original
+  exception. Context shutdown attempts every owned resource and logs cleanup errors rather than hiding the original
+  command failure. Workspace device profiles are deferred.
+- **Requests:** `device.request` encodes via the existing hex/manifest path, then writes and reads one fixed-size
+  response under one session lock. `--response-size` selects raw data, `--response-manifest` sizes and decodes it.
+  The response timeout starts after writing; lock acquisition is bounded separately. No queue draining, automatic
+  retries, response matching, or unsolicited-message routing. Separate `send` and `expect` calls remain available.
+- **Write deadlines:** pyserial handles blocking I/O; serial, loop and socket writes default to the connection's
+  timeout, with optional `--write-timeout`. Partial writes continue only the unsent suffix under the same deadline;
+  failed writes are not replayed. No unconditional `flush()` because output draining can block without a deadline.
+  RFC2217 does not support pyserial's `write_timeout`: preserve native behavior unless the user explicitly requests
+  that unsupported setting, in which case fail clearly. Raw serial chunks are capped at 64 KiB; only the first byte
+  waits, then available bytes are polled without extending the deadline.
+- **Layering:** transports move bytes, sessions own fixed-size assembly and request coordination, existing `Codec`
+  helpers own manifest serialization, and commands compose them. No additional dependency, background worker,
+  transport base class, or general protocol framework. Future HID/BLE plugins must explicitly preserve/adapt native
+  report identifiers and boundaries. COBS/SLIP/length-prefix framing is deferred.
 - **Capture:** bounded and foreground (`--seconds`, default 10, and optional `--count`), NDJSON records
   `{ts, dir, hex, decoded | error}`. Bad or partial packets are recorded with an `error`, not fatal. No background threads.
   The same files are intended as input for state-machine trace replay.
@@ -102,12 +122,29 @@ Prompted by comparing with the SMAL project's cmd2-based REPL, then a throwaway 
   Events are registered as `ev_<name>` so user event names can never clash with attributes transitions adds.
 - **Guards/match:** `simpleeval` expressions over event data. Actions are labels reported on firing, never executed.
   A guard that can't be evaluated is an error; an event `match` that can't be evaluated (missing field) just doesn't match.
-- **Property checks** (`check.py`, plain graph traversal, guards ignored): unreachable-state, dead-end (unless
-  `safe`), shadowed-transition (an unguarded transition hides later ones for the same state+event), unused-event,
-  no-safe-path (only when some state is marked `safe`).
+- **Property checks** (`check.py`, NetworkX, guards ignored): an explicit registry of plain check functions consumes
+  shared graph indexes and returns all findings through the existing `Issue` fields. Rule identifiers and default
+  severities are explicit; detection returns severity-independent findings. Loading a model does not run graph checks
+  or corrections. Existing rule identifiers and severities are unchanged: unreachable-state, dead-end (unless `safe`),
+  shadowed-transition, unused-event, no-safe-path (only when some state is marked `safe`).
+  `MultiDiGraph` preserves parallel transitions, manifest indexes as edge keys, declaration order, and original
+  transition objects; wildcard/list sources expand only in the analysis index. The manifest is not modified.
+- **New structural requirements:** `State.required_events` optionally lists declared events that must have an outgoing
+  transition in that state (`missing-required-event`, error). A guarded transition counts; guard coverage needs a
+  separate behavioral analysis. `trapping-component` warns about reachable closed cyclic strongly connected components
+  without safe states, excluding the component containing the initial state and acyclic dead ends. This detects entered
+  traps, not livelock or liveness failures. Findings remain data rows, not command failures.
+- **Graph dependency:** verified official `networkx` on PyPI and networkx.org: maintained by the NetworkX Developers,
+  with active 3.x releases and BSD-3-Clause licensing. Require `>=3.4,<4`; pip selects a Python-compatible release
+  (including Python 3.11, which the latest release no longer supports). Add no graph extras. Severity overrides,
+  source locations, behavioral exploration and solver integrations remain deferred.
 - **Replay:** first event whose `match` is true fires per decoded record; records with `error` are skipped. If the
   machine names a `state_field`, the packet's state is compared to the model's after the event; a mismatch is flagged
   and the model adopts the device's state (unknown state names are flagged and not adopted).
+- **Command results:** plaintext includes useful details; Rich tables use the same result fields and safe text cells.
+  Structured data keeps aggregate envelopes (`transitions`, `findings`, `steps`, `coverage`, or replay `rows`). Nested
+  findings are serialized models; clean checks return `findings: []`. Replay includes pre-filter totals and retains
+  processing errors in `--only-problems`. Finding/replay severity reflects problems, independently of exit status.
 - **Coverage:** tracked inside `Simulator` (`coverage.py`): states visited, transitions fired per concrete source
   state, and both outcomes of each guard. Items are readable strings, not indexes, so coverage files survive machine
   edits (stale items are ignored). Per-run summary is logged to stderr; `--coverage-file` opts in to accumulating
@@ -122,6 +159,16 @@ Prompted by comparing with the SMAL project's cmd2-based REPL, then a throwaway 
   failing sequence as a `sm.simulate` command; passing runs return coverage rows. Invariants are only checked by fuzz.
 - **Rendering:** Mermaid text only. Create/edit/delete commands, hierarchical states, timeouts and fuzzing deferred;
   edit the YAML directly.
+
+## Code generation decisions
+
+- **First slice:** `codegen.state_machine` emits a C header with declaration-order state and event enums. The template
+  receives a small immutable C context built from the validated `MachineSpec`; it does not inspect the schema model
+  directly. Transition execution, guard evaluation, action implementations, custom templates, and other targets are
+  deferred until there is a concrete need.
+- **Rendering and writes:** Jinja2 uses `StrictUndefined`, package-resource templates, and reusable macros. Output is
+  rendered before writing, published atomically, and never overwrites an existing file without `--force`. Package data
+  explicitly includes the `.j2` files.
 
 ## DSP plugin decisions
 
@@ -154,9 +201,11 @@ Prompted by comparing with the SMAL project's cmd2-based REPL, then a throwaway 
 
 ## Supporting decisions
 
-- **Result contract:** a handler returns `None`, one pydantic model/dict, or a list of them. Everything is normalised to
-  `list[dict]` rows before rendering, so `table`, `json` and `ndjson` output are free for every command.
-- **Output format `auto`:** table on a TTY, NDJSON when piped.
+- **Result contract:** handlers may return `RigboxResponse`, `HumanReadableResponse`, or legacy model/dict/list/None
+  results. Dispatch returns a `RigboxResponse` with JSON-compatible rows and an optional human message. Workflows
+  preserve the final step's complete response. Human-only responses produce no structured rows.
+- **Output format `auto`:** human on a TTY, NDJSON when piped. Human mode uses the explicit message or falls back to
+  a table; explicit table/JSON/NDJSON modes use structured data only. Diagnostics remain on stderr.
 - **Workspace file:** `rigbox.yaml` (YAML, for consistency with manifests; chosen when we targeted Python 3.10
   which has no `tomllib`, and kept after moving to 3.11). Runtime state lives in
   `.rigbox/` (history, REPL history) and should be git-ignored.

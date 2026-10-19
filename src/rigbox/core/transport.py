@@ -2,6 +2,8 @@
 
 A transport is a plain byte stream. The registry maps a URL scheme (``loop``, ``replay``, ...) to a factory that opens
 one, so a plugin can add support for a new kind of device by registering a scheme (see `Registry.add_transport`).
+Framing, decoding and request/response coordination belong above this interface. Report-based transports must
+explicitly adapt report identifiers and boundaries rather than silently discarding them.
 """
 
 from __future__ import annotations
@@ -27,20 +29,27 @@ class TransportOptions:
     params: Mapping[str, str] = field(default_factory=dict)
     """Extra transport-specific ``key=value`` options (``device.connect --param key=value``)."""
 
+    write_timeout: float | None = None
+    """Write deadline in seconds where supported; serial defaults to ``timeout`` (RFC2217 is an exception)."""
+
 
 class Transport(Protocol):
     """A byte stream to a device. Any object with these methods works; no base class is needed."""
 
     def write(self, data: bytes) -> None:
-        """Send `data` to the device."""
+        """Send all of `data` or raise `OSError`; never silently accept a short write.
+
+        Implementations must document write-timeout limitations. Success means accepted by the transport, not
+        acknowledged by the remote device. Do not retry a failed command automatically.
+        """
         ...
 
     def read(self, size: int, timeout: float) -> bytes:
-        """Read up to `size` bytes, giving up after `timeout` seconds; returns fewer bytes on timeout.
+        """Read at most `size` bytes within `timeout` seconds; partial reads are allowed and zero timeout polls.
 
         Raises:
             EOFError: If the stream has ended for good (such as a finished recording) and nothing was read.
-                A live device never ends, so it just times out.
+            OSError: If communication fails or the device disconnects unexpectedly.
         """
         ...
 
@@ -49,11 +58,12 @@ class Transport(Protocol):
 
         Raises:
             EOFError: If the stream has ended for good.
+            OSError: If communication fails or the device disconnects unexpectedly.
         """
         ...
 
     def close(self) -> None:
-        """Release the underlying resource."""
+        """Release the underlying resource; repeated calls should be harmless."""
         ...
 
 

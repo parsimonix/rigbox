@@ -1,9 +1,14 @@
-"""Command-line parsing: a command's pydantic args model becomes an argparse parser.
+"""Module for command-line parsing using pydantic models.
 
-The same parser serves ``rigbox run <command> ...`` and the interactive shell, so both accept exactly the same
-arguments and show the same ``--help``. Required fields are positional arguments in field order; optional fields are
-``--options``; ``bool`` fields are bare flags; ``list`` fields can repeat; ``Literal`` fields become validated
-choices. Values stay strings here and pydantic converts and validates them when the command runs.
+Rigbox defines all commands using pydantic models to represent their arguments.
+
+This module provides functions to convert these pydantic models into argparse parsers,
+so that commands can be run both from the command line and the interactive shell with consistent argument handling.
+
+Required fields in the pydantic model become positional arguments, while optional fields become named options with `--`.
+Boolean fields become bare flags, list fields can repeat, and Literal fields become validated choices.
+
+Values stay as strings when parsed from the command line, and pydantic handles conversion and validation when the command runs.
 """
 
 from __future__ import annotations
@@ -76,13 +81,17 @@ def _help_text(info: FieldInfo) -> str:
 
 def build_parser(name: str, model: type[BaseModel], summary: str) -> RigboxParser:
     """Build the parser for command `name` from its args `model`; `summary` is shown as the description."""
+    # First, create a parser instance
     parser = RigboxParser(prog=name, description=summary, allow_abbrev=False, suggest_on_error=True)
+    # Then, create the fields using the pydantic model's field definitions
     parser.fields = tuple(model.model_fields)
+    # Now, we add each field as an argument to the parser based on its properties
     for field, info in model.model_fields.items():
         annotation = _unwrap(info.annotation)
         options: dict[str, Any] = {"help": _help_text(info)}
         if typing.get_origin(annotation) is typing.Literal:
             options["choices"] = list(typing.get_args(annotation))
+        # Automatically set up path completion for path fields
         if _is_path(info):
             options["completer"] = cmd2.Cmd.path_complete
         if info.is_required():
@@ -98,7 +107,7 @@ def build_parser(name: str, model: type[BaseModel], summary: str) -> RigboxParse
     return parser
 
 
-@functools.cache
+@functools.cache  # Cache the parser for each command to avoid rebuilding it multiple times
 def parser_for(command: Command) -> RigboxParser:
     """Return the (cached) parser for a registered command."""
     return build_parser(command.name, command.args_model, command.help)

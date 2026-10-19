@@ -13,11 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rigbox.core.registry import CommandError
 
 # (min, max) for each integer type
-INT_RANGES = {
-    f"{kind}{bits}": (0, 2**bits - 1) if kind == "u" else (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1)
-    for kind in "ui"
-    for bits in (8, 16, 32, 64)
-}
+INT_RANGES = {f"{kind}{bits}": (0, 2**bits - 1) if kind == "u" else (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1) for kind in "ui" for bits in (8, 16, 32, 64)}
 SCALAR_SIZES = {**{t: int(t[1:]) // 8 for t in INT_RANGES}, "f32": 4, "f64": 8, "bool": 1}
 
 _IDENT = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -37,14 +33,14 @@ class FieldSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
-    type: Literal[
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string", "bytes"
-    ]
-    length: int | None = Field(None, ge=1, description="Byte length; string and bytes only")
-    count: int | None = Field(None, ge=1, description="Array length; numeric types only")
-    description: str = ""
-    unit: str = ""
+    name: str = Field(..., description="Name of the field")
+    type: Literal["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string", "bytes"] = Field(
+        ..., description="Data type of the field"
+    )
+    length: int | None = Field(None, ge=1, description="Byte length of the field; applicable for string and bytes types only")
+    count: int | None = Field(None, ge=1, description="Array length of the field; applicable for numeric types only")
+    description: str = Field("", description="Description of the field")
+    unit: str = Field("", description="Unit of the field")
 
     @field_validator("name")
     @classmethod
@@ -78,10 +74,10 @@ class StructManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
-    description: str = ""
-    endian: Literal["little", "big"] = "little"
-    fields: list[FieldSpec] = Field(min_length=1)
+    name: str = Field(..., description="Name of the struct")
+    description: str = Field("", description="Description of the struct")
+    fields: list[FieldSpec] = Field(..., min_length=1, description="Ordered list of fields in the struct")
+    endian: Literal["little", "big"] = Field("little", description="Byte order of the struct")
 
     @field_validator("name")
     @classmethod
@@ -110,19 +106,25 @@ class StructManifest(BaseModel):
         """Total packed size in bytes."""
         return sum(f.size for f in self.fields)
 
+    @classmethod
+    def load_from_file(cls, path: Path) -> Self:
+        """Read and validate the manifest at `path`.
 
-def load_manifest(path: Path) -> StructManifest:
-    """Read and validate the manifest at `path`.
+        Args:
+            path (Path): The path to the manifest file to load.
 
-    Raises:
-        CommandError: If the file cannot be read or does not validate.
-    """
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as e:
-        raise CommandError(f"cannot read {path}: {e}") from None
-    try:
-        return StructManifest.model_validate(data)
-    except ValidationError as e:
-        problems = "; ".join(f"{'.'.join(map(str, err['loc'])) or 'manifest'}: {err['msg']}" for err in e.errors())
-        raise CommandError(f"{path.name}: {problems}") from None
+        Returns:
+            StructManifest: The validated manifest.
+
+        Raises:
+            CommandError: If the file cannot be read or does not validate.
+        """
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as e:
+            raise CommandError(f"cannot read {path}: {e}") from None
+        try:
+            return StructManifest.model_validate(data)
+        except ValidationError as e:
+            problems = "; ".join(f"{'.'.join(map(str, err['loc'])) or 'manifest'}: {err['msg']}" for err in e.errors())
+            raise CommandError(f"{path.name}: {problems}") from None

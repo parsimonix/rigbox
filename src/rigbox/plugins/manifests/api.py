@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from rigbox.core.registry import CommandError
 from rigbox.plugins.manifests.build import build_codec, build_model
-from rigbox.plugins.manifests.schema import StructManifest, load_manifest
+from rigbox.plugins.manifests.schema import StructManifest
 
 if TYPE_CHECKING:
     from rigbox.core.context import Context
@@ -33,7 +33,7 @@ def find_manifest(ctx: Context, ref: str) -> Path:
 
 def resolve_manifest(ctx: Context, ref: str) -> StructManifest:
     """Load a manifest from a file path, or by name from the workspace manifests dir."""
-    return load_manifest(find_manifest(ctx, ref))
+    return StructManifest.load_from_file(find_manifest(ctx, ref))
 
 
 def parse_values(text: str) -> dict[str, Any]:

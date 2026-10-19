@@ -1,0 +1,10 @@
+{% macro c_machine_errors(context) %}
+typedef enum
+{
+{% for error in context.errors %}
+    {{ context.name | upper }}_ERROR_{{ error.name | upper }} = {{ error.id }},
+{% endfor %}
+    /* End of error table. */
+    {{ context.name | upper }}_ERROR_NUM_ERRORS,
+} {{ context.name | lower }}_error_t;
+{% endmacro %}

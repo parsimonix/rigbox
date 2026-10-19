@@ -1,0 +1,10 @@
+{% macro c_machine_events(context) %}
+typedef enum
+{
+{% for event in context.events %}
+    {{ event.symbol }} = {{ event.value }},
+{% endfor %}
+    {{ context.event_count_symbol }},
+    {{ context.null_event_symbol }},
+} {{ context.event_type }};
+{% endmacro %}

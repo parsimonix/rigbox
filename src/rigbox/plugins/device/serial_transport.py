@@ -7,13 +7,14 @@ import time
 import serial
 
 from rigbox.core.registry import CommandError
-from rigbox.core.transport import Transport, TransportOptions
+from rigbox.core.transport import Transport, TransportOptions, scheme_of
 
 DEFAULT_BAUD = 115200
+MAX_CHUNK_SIZE = 65536
 
 
 class SerialTransport:
-    """A pyserial port."""
+    """Adapt pyserial to a byte stream without framing, decoding, or reader threads."""
 
     def __init__(self, url: str, options: TransportOptions) -> None:
         """Open `url` (a port name or pyserial URL) with the options' baud rate and timeout.
@@ -21,35 +22,57 @@ class SerialTransport:
         Raises:
             CommandError: If the port cannot be opened.
         """
+        self._write_timeout: float | None = options.write_timeout if options.write_timeout is not None else options.timeout
+        if scheme_of(url) == "rfc2217":
+            if options.write_timeout is not None:
+                raise CommandError("pyserial's RFC2217 transport does not support --write-timeout")
+            self._write_timeout = None
         try:
             self._port = serial.serial_for_url(
-                url.removeprefix("serial://"), baudrate=options.baud or DEFAULT_BAUD, timeout=options.timeout
+                url.removeprefix("serial://"),
+                baudrate=options.baud or DEFAULT_BAUD,
+                timeout=options.timeout,
+                write_timeout=self._write_timeout,
             )
         except (serial.SerialException, ValueError, OSError) as e:
             raise CommandError(f"cannot open {url}: {e}") from None
 
     def write(self, data: bytes) -> None:
-        """Write `data` and flush."""
-        self._port.write(data)
-        self._port.flush()
+        """Write all bytes within one deadline, without an unbounded flush.
+
+        RFC2217 retains pyserial's own network behavior because that handler cannot set a write timeout.
+        """
+        if not data:
+            return
+        if self._write_timeout is None:
+            if self._port.write(data) != len(data):
+                raise serial.SerialTimeoutException("incomplete write")
+            return
+        deadline = time.monotonic() + self._write_timeout
+        offset = 0
+        while offset < len(data):
+            remaining = min(self._write_timeout, deadline - time.monotonic())
+            if remaining <= 0:
+                raise serial.SerialTimeoutException(f"write timeout after {offset} of {len(data)} bytes")
+            self._port.write_timeout = remaining
+            written = self._port.write(data[offset:])
+            if written is None or written <= 0:
+                raise serial.SerialTimeoutException(f"write made no progress after {offset} of {len(data)} bytes")
+            offset += written
 
     def read(self, size: int, timeout: float) -> bytes:
-        """Read up to `size` bytes, giving up after `timeout` seconds. Returns fewer bytes on timeout."""
-        end = time.monotonic() + timeout
-        buf = b""
-        while len(buf) < size:
-            remaining = end - time.monotonic()
-            if remaining <= 0:
-                break
-            self._port.timeout = remaining
-            buf += self._port.read(size - len(buf))
-        return buf
+        """Read up to `size` bytes; the session layer owns packet assembly and its overall deadline."""
+        self._port.timeout = timeout
+        return self._port.read(size)
 
     def read_chunk(self, timeout: float) -> bytes:
         """Wait up to `timeout` for data, then return whatever has arrived."""
         self._port.timeout = timeout
         first = self._port.read(1)
-        return first + self._port.read(self._port.in_waiting) if first else b""
+        if not first:
+            return b""
+        self._port.timeout = 0
+        return first + self._port.read(min(self._port.in_waiting, MAX_CHUNK_SIZE - 1))
 
     def close(self) -> None:
         """Close the port."""

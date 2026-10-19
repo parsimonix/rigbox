@@ -1,0 +1,8 @@
+{% macro c_union(context) %}
+typedef union
+{
+{% for field_name, field_type_and_desc in context.fields.items() %}
+    {{ field_type_and_desc[0] }} {{field_name}}; // {{ field_type_and_desc[1] }}
+{% endfor %}
+} {{ context.struct_name.rstrip("_t") | lower }}_t;
+{% endmacro %}

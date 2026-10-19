@@ -1,0 +1,10 @@
+{% macro c_enum(context) %}
+typedef enum
+{
+{% for ename, eval in context.values.items() %}
+    {{ ename | upper }} = {{ eval }},
+{% endfor %}
+    /* End of enumeration. */
+    {{ context.name | upper }}_COUNT,
+} {{ context.name.rstrip("_t") | lower }}_t;
+{% endmacro %}

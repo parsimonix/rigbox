@@ -1,0 +1,20 @@
+{% macro c_machine_state_table_entry(context) %}
+/* All actions take the state machine itself as an argument and return nothing. */
+typedef void (*{{ context.name | lower }}_action_t)({{ context.name | lower }}_state_machine_t *state_machine);
+
+/* A state table entry for the {{ context.name | capitalize }} state machine. */
+#define MAX_ACTIONS_PER_EVENT {{ context.max_actions }} // Arbitrary number to cap static allocation of actions in state table. Adjust as needed.
+typedef struct
+{
+    /* The initial state for this table entry. */
+    {{ context.name | lower }}_state_t src;
+    /* The event which triggers this table entry. */
+    {{ context.name | lower }}_event_t evt;
+    /* The action(s) taken by this table entry (in order of definition) in response to `event`. */
+    {{ context.name | lower }}_action_t actions[MAX_ACTIONS_PER_EVENT + 1];
+    /* The state which the table entry places the state machine in after executing it's action(s). */
+    {{ context.name | lower }}_state_t tgt;
+    /* The event to handle upon entering tgt, if any. */
+    {{ context.name | lower }}_event_t tgt_entry_evt;
+} {{ context.name | lower }}_state_table_entry_t;
+{% endmacro %}

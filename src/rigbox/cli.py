@@ -7,17 +7,17 @@ from typing import Annotated
 
 import typer
 
-from rigbox.constants import OutputFormats
+from rigbox.constants import RenderFormat, RenderLevel
 from rigbox.core.context import Context
 from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry, UsageError
-from rigbox.core.render import render
+from rigbox.core.render import RigboxCmdResult
 from rigbox.core.workspace import Workspace
 
 cli = typer.Typer()
 
 
-def _build_context(workspace: str | None, fmt: str) -> Context:
+def _build_context(workspace: str | None, fmt: RenderFormat) -> Context:
     """Find the workspace (from `workspace` or the cwd), load plugins and return a ready Context."""
     ws = Workspace.find(Path(workspace) if workspace else Path.cwd())
     registry = Registry()
@@ -36,7 +36,7 @@ def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
         from rigbox.repl import run_repl
 
-        rigbox_ctx = _build_context(None, "auto")
+        rigbox_ctx = _build_context(None, RenderFormat.default())
         run_repl(rigbox_ctx)
 
 
@@ -68,16 +68,14 @@ def init(
 def run(
     tokens: Annotated[list[str], typer.Argument(help="<command> [args...]")],
     workspace: Annotated[str | None, typer.Option(help="Start the workspace search here (default: cwd)")] = None,
-    fmt: Annotated[
-        OutputFormats.ANNOTATION, typer.Option("--format", "-f", help=f"Output format (default: {OutputFormats.DEFAULT_VALUE})")
-    ] = OutputFormats.DEFAULT_VALUE,
+    fmt: Annotated[RenderFormat, typer.Option("--format", "-f", help=f"Output format (default: {RenderFormat.default()})")] = RenderFormat.default(),
 ) -> None:
     """Run one command non-interactively.
 
     Args:
         tokens (Annotated[list[str], typer.Argument): The command and its arguments to run.
         workspace (str | None, optional): The workspace to start the search from. Defaults to cwd.
-        fmt (Literal["auto", "table", "json", "ndjson"], optional): The output format. Defaults to "auto".
+        fmt: The output format, including plain text, tables, JSON, and NDJSON. Defaults to "auto".
 
     Raises:
         typer.Exit(code=2): Raised if no command is specified.
@@ -90,14 +88,15 @@ def run(
         raise typer.Exit(code=2)
     ctx = _build_context(workspace, fmt)
     try:
-        rows = ctx.run_tokens(tokens)
+        response = ctx.run_tokens(tokens)
     except UsageError as e:
-        raise typer.Exit(code=2) from e
+        raise typer.Exit(code=e.exit_code) from e
     except CommandError as e:
+        typer.echo(RigboxCmdResult(text=str(e), level=RenderLevel.ERROR), err=True)
         raise typer.Exit(code=1) from e
     finally:
         ctx.close()
-    out = render(rows, fmt)
+    out = response.render(fmt)
     if out:
         typer.echo(out)
     raise typer.Exit(code=0)
@@ -107,9 +106,7 @@ def run(
 def script(
     file: Annotated[Path, typer.Argument(help="The script file to execute.")],
     workspace: Annotated[str | None, typer.Option(help="Start the workspace search here (default: cwd)")] = None,
-    fmt: Annotated[
-        OutputFormats.ANNOTATION, typer.Option("--format", "-f", help=f"Output format (default: {OutputFormats.DEFAULT_VALUE})")
-    ] = OutputFormats.DEFAULT_VALUE,
+    fmt: Annotated[RenderFormat, typer.Option("--format", "-f", help=f"Output format (default: {RenderFormat.default()})")] = RenderFormat.default(),
     var: Annotated[list[str] | None, typer.Option("--var", "-v", help="key=value override")] = None,
 ) -> None:
     """Execute a script file within the Rigbox workspace.
@@ -117,7 +114,7 @@ def script(
     Args:
         file (Annotated[Path, typer.Argument): The script file to execute.
         workspace (str | None, optional): The workspace to start the search from. Defaults to cwd.
-        fmt (Literal["auto", "table", "json", "ndjson"], optional): The output format. Defaults to "auto".
+        fmt: The output format, including plain text, rich renderables, JSON, and NDJSON. Defaults to "auto".
         var (Annotated[list[str] | None, typer.Option, optional): Key=value overrides for the script. Defaults to None.
 
     Raises:
@@ -127,14 +124,15 @@ def script(
     """
     ctx = _build_context(workspace, fmt)
     try:
-        rows = ctx.run("workflow.run", {"workflow": file, "var": var or []})
+        response = ctx.run("workflow.run", {"workflow": str(file), "var": var or []})
     except UsageError as e:
-        raise typer.Exit(code=2) from e
+        raise typer.Exit(code=e.exit_code) from e
     except CommandError as e:
+        typer.echo(RigboxCmdResult(text=str(e), level=RenderLevel.ERROR), err=True)
         raise typer.Exit(code=1) from e
     finally:
         ctx.close()
-    out = render(rows, fmt)
+    out = response.render(fmt)
     if out:
         typer.echo(out)
     raise typer.Exit(code=0)

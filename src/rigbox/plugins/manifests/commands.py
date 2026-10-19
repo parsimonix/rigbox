@@ -13,7 +13,7 @@ from rigbox.hooks import hookimpl
 from rigbox.plugins.manifests.api import Codec, find_manifest, parse_values, resolve_manifest
 from rigbox.plugins.manifests.build import model_source
 from rigbox.plugins.manifests.check import Change, Issue, diff, lint
-from rigbox.plugins.manifests.schema import load_manifest
+from rigbox.plugins.manifests.schema import StructManifest
 
 if TYPE_CHECKING:
     from rigbox.core.context import Context
@@ -77,7 +77,7 @@ def rigbox_register(registry: Registry) -> None:
     def generate(ctx: Context, args: GenerateArgs) -> dict[str, str]:
         """Write a pydantic model source file for a manifest."""
         src = find_manifest(ctx, args.manifest)
-        m = load_manifest(src)
+        m = StructManifest.load_from_file(src)
         out = Path(args.out) if args.out else src.with_name(f"{src.stem}_model.py")
         out.write_text(model_source(m), encoding="utf-8")
         return {"model": m.name, "written": str(out)}

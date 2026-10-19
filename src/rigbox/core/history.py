@@ -21,7 +21,13 @@ class History:
                     self._entries.append(json.loads(line))
 
     def append(self, run: str, args: dict[str, Any], ok: bool = True) -> None:
-        """Record a command run (name, args, success flag) and write it to the file, if any."""
+        """Record a command run (name, args, success flag) and write it to the file, if any.
+
+        Args:
+            run (str): The name of the command that was run.
+            args (dict[str, Any]): The arguments passed to the command.
+            ok (bool, optional): Whether the command ran successfully. Defaults to True.
+        """
         entry = {"ts": round(time.time(), 3), "run": run, "args": args, "ok": ok}
         self._entries.append(entry)
         if self.path is not None:
@@ -30,5 +36,9 @@ class History:
                 f.write(json.dumps(entry) + "\n")
 
     def entries(self) -> list[dict[str, Any]]:
-        """Return a copy of all entries, oldest first."""
+        """Return a copy of all entries, oldest first.
+
+        Returns:
+            list[dict[str, Any]]: A list of all history entries, each being a dictionary with keys "ts", "run", "args", and "ok".
+        """
         return list(self._entries)

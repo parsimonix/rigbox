@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING
 
 import pluggy
 
-from rigbox.constants import RIGBOX_PLUGIN_PROJECT
+from rigbox.constants import Plugins
 
 if TYPE_CHECKING:
     from rigbox.core.registry import Registry
 
-hookspec = pluggy.HookspecMarker(RIGBOX_PLUGIN_PROJECT)
-hookimpl = pluggy.HookimplMarker(RIGBOX_PLUGIN_PROJECT)
+hookspec = pluggy.HookspecMarker(Plugins.PROJECT)
+hookimpl = pluggy.HookimplMarker(Plugins.PROJECT)
 
 
 @hookspec

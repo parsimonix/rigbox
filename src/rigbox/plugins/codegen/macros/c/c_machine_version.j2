@@ -1,0 +1,3 @@
+{% macro c_machine_version(context) %}
+#define {{ context.name | upper }}_VERSION "{{ context.version }}"
+{% endmacro %}

@@ -1,0 +1,20 @@
+{% macro c_machine_state_transition_table(context) %}
+static const {{ context.name | lower }}_state_table_entry_t {{ context.name | lower }}_state_table[] =
+{
+{% for t in context.transitions %}
+{{ (
+    "{" ~
+    (context.name | upper) ~ "_STATE_" ~ (t.source | upper) ~ ", " ~
+    (context.name | upper) ~ "_EVENT_" ~ (t.event | upper) ~ ", " ~
+    "{" ~ ((t.actions + ["NULL"]) | join(', ')) ~ "}, " ~
+    (context.name | upper) ~ "_STATE_" ~ (t.target | upper) ~ ", " ~
+    (
+        (context.name | upper) ~ "_EVENT_" ~ (t.tgt_entry_evt | upper)
+        if t.tgt_entry_evt
+        else (context.name | upper) ~ "_EVENT_NULL"
+    ) ~
+    "},"
+) | indent(4, true) }}
+{% endfor %}
+};
+{% endmacro %}

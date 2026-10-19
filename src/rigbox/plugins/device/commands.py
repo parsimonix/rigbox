@@ -1,4 +1,4 @@
-"""device.* commands: ports, transports, connect, close, list, send, expect, capture.
+"""device.* commands: ports, transports, connect, close, list, send, expect, request, capture.
 
 Connections are named and live on the Context, so they last for a REPL session or one workflow run. A URL's scheme
 picks the transport (see `device.transports`): `loop://` is a loopback port that echoes what you write, and
@@ -35,7 +35,10 @@ class ConnectArgs(BaseModel):
     name: str = Field(description="Name to refer to this connection by")
     url: str = Field(description="A serial port (COM3), or a URL whose scheme picks the transport (device.transports)")
     baud: int = Field(115200, ge=1, description="Serial baud rate (ignored by transports without one)")
-    timeout: float = Field(1.0, gt=0, description="Default read timeout in seconds")
+    timeout: float = Field(1.0, gt=0, allow_inf_nan=False, description="Default read timeout in seconds")
+    write_timeout: float | None = Field(
+        None, gt=0, allow_inf_nan=False, description="Serial write deadline in seconds (default: --timeout; unsupported by RFC2217)"
+    )
     param: list[str] = Field(default_factory=list, description="Transport-specific option key=value (repeatable)")
 
 
@@ -58,13 +61,21 @@ class ExpectArgs(NameArgs):
 
     manifest: str | None = path_field(None, description="Read one packet and decode it with this manifest")
     size: int | None = Field(None, ge=1, description="Read exactly this many raw bytes")
-    timeout: float | None = Field(None, gt=0, description="Seconds to wait (default: the connection's timeout)")
+    timeout: float | None = Field(None, gt=0, allow_inf_nan=False, description="Seconds to wait (default: the connection's timeout)")
+
+
+class RequestArgs(SendArgs):
+    """Arguments for `device.request`."""
+
+    response_manifest: str | None = path_field(None, description="Manifest used to size and decode the response")
+    response_size: int | None = Field(None, ge=1, description="Read exactly this many response bytes")
+    timeout: float | None = Field(None, gt=0, allow_inf_nan=False, description="Response timeout after writing, in seconds (default: connection timeout)")
 
 
 class CaptureArgs(NameArgs):
     """Arguments for `device.capture`."""
 
-    seconds: float = Field(10.0, gt=0, description="Stop after this long")
+    seconds: float = Field(10.0, gt=0, allow_inf_nan=False, description="Stop after this long")
     count: int | None = Field(None, ge=1, description="Stop after this many packets")
     manifest: str | None = path_field(None, description="Split the stream into packets and decode with this manifest")
     size: int | None = Field(None, ge=1, description="Split the stream into fixed-size raw packets")
@@ -95,6 +106,26 @@ def _capture_path(ctx: Context, name: str, out: str | None) -> Path:
     return base / f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ndjson"
 
 
+def _encode(ctx: Context, args: SendArgs) -> bytes:
+    if args.hex is not None and args.manifest is None:
+        try:
+            return bytes.fromhex(args.hex.replace(" ", ""))
+        except ValueError as error:
+            raise CommandError(f"bad hex: {error}") from None
+    if args.manifest is not None and args.values is not None and args.hex is None:
+        return Codec(resolve_manifest(ctx, args.manifest)).encode(parse_values(args.values))
+    raise CommandError("give either --hex, or --manifest together with --values")
+
+
+def _packet(ctx: Context, manifest: str | None, size: int | None) -> tuple[Codec | None, int]:
+    if manifest is not None and size is None:
+        codec = Codec(resolve_manifest(ctx, manifest))
+        return codec, codec.size
+    if size is not None and manifest is None:
+        return None, size
+    raise CommandError("give exactly one packet manifest or fixed size")
+
+
 @hookimpl
 def rigbox_register(registry: Registry) -> None:
     """Register the `device.*` commands and the built-in transports."""
@@ -120,7 +151,7 @@ def rigbox_register(registry: Registry) -> None:
         """Open a named connection to a device."""
         if args.name in ctx.connections:
             raise CommandError(f"connection '{args.name}' already exists")
-        options = TransportOptions(timeout=args.timeout, baud=args.baud, params=_parse_params(args.param))
+        options = TransportOptions(timeout=args.timeout, baud=args.baud, params=_parse_params(args.param), write_timeout=args.write_timeout)
         transport = ctx.registry.open_transport(args.url, options)
         connection = Connection(args.name, args.url, transport, options)
         ctx.connections[args.name] = connection
@@ -135,25 +166,13 @@ def rigbox_register(registry: Registry) -> None:
     @registry.command("device.list", record=False)
     def list_(ctx: Context, args: NoArgs) -> list[dict[str, Any]]:
         """List open connections."""
-        return [
-            {"name": c.name, "url": c.url, "transport": c.scheme, "timeout": c.timeout}
-            for c in ctx.connections.values()
-            if isinstance(c, Connection)
-        ]
+        return [{"name": c.name, "url": c.url, "transport": c.scheme, "timeout": c.timeout} for c in ctx.connections.values() if isinstance(c, Connection)]
 
     @registry.command("device.send", args=SendArgs)
     def send(ctx: Context, args: SendArgs) -> dict[str, Any]:
         """Send raw hex bytes, or a packet packed from a manifest."""
         conn = _get(ctx, args.name)
-        if args.hex is not None and args.manifest is None:
-            try:
-                data = bytes.fromhex(args.hex.replace(" ", ""))
-            except ValueError as e:
-                raise CommandError(f"bad hex: {e}") from None
-        elif args.manifest is not None and args.values is not None and args.hex is None:
-            data = Codec(resolve_manifest(ctx, args.manifest)).encode(parse_values(args.values))
-        else:
-            raise CommandError("give either --hex, or --manifest together with --values")
+        data = _encode(ctx, args)
         conn.write(data)
         return {"name": args.name, "sent": len(data), "hex": data.hex()}
 
@@ -161,19 +180,21 @@ def rigbox_register(registry: Registry) -> None:
     def expect(ctx: Context, args: ExpectArgs) -> dict[str, Any]:
         """Wait for one packet (manifest-sized or fixed size) and show it."""
         conn = _get(ctx, args.name)
-        if (args.manifest is None) == (args.size is None):
-            raise CommandError("give exactly one of --manifest or --size")
-        codec = Codec(resolve_manifest(ctx, args.manifest)) if args.manifest else None
-        size = codec.size if codec else args.size
-        assert size is not None  # exactly one of manifest/size was given (checked above)
-        ended = False
-        try:
-            data = conn.read(size, args.timeout or conn.timeout)
-        except EOFError:
-            data, ended = b"", True
-        if len(data) < size:
-            reason = "stream ended" if ended else "timeout"
-            raise CommandError(f"{reason}: got {len(data)} of {size} bytes ({data.hex()})")
+        codec, size = _packet(ctx, args.manifest, args.size)
+        data = conn.read_exactly(size, args.timeout if args.timeout is not None else conn.timeout)
+        return codec.decode(data) if codec else {"size": len(data), "hex": data.hex()}
+
+    @registry.command("device.request", args=RequestArgs)
+    def request(ctx: Context, args: RequestArgs) -> dict[str, Any]:
+        """Send one packet and read one fixed-size response without interleaved connection I/O.
+
+        Select the reply with --response-size or --response-manifest. Buffered input is retained; no response
+        correlation, automatic retries, or background capture is performed.
+        """
+        conn = _get(ctx, args.name)
+        codec, size = _packet(ctx, args.response_manifest, args.response_size)
+        payload = _encode(ctx, args)
+        data = conn.request(payload, size, args.timeout if args.timeout is not None else conn.timeout)
         return codec.decode(data) if codec else {"size": len(data), "hex": data.hex()}
 
     @registry.command("device.capture", args=CaptureArgs)
@@ -190,8 +211,11 @@ def rigbox_register(registry: Registry) -> None:
         end = time.monotonic() + args.seconds
         packets = errors = 0
         with path.open("w", encoding="utf-8") as f:
-            while (args.count is None or packets < args.count) and time.monotonic() < end:
-                wait = min(conn.timeout, end - time.monotonic())
+            while args.count is None or packets < args.count:
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    break
+                wait = min(conn.timeout, remaining)
                 try:
                     data = conn.read(size, wait) if size else conn.read_chunk(wait)
                 except EOFError:  # a finished recording: nothing more will ever arrive

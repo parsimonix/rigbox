@@ -1,0 +1,9 @@
+{% macro c_machine_states(context) %}
+typedef enum
+{
+{% for state in context.states %}
+    {{ state.symbol }} = {{ state.value }},
+{% endfor %}
+    {{ context.state_count_symbol }},
+} {{ context.state_type }};
+{% endmacro %}

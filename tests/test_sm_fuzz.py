@@ -12,7 +12,7 @@ from rigbox.plugins.manifests.schema import StructManifest
 from rigbox.plugins.statemachine.coverage import Coverage, summary
 from rigbox.plugins.statemachine.engine import Simulator
 from rigbox.plugins.statemachine.fuzz import format_steps, value_pools
-from rigbox.plugins.statemachine.schema import MachineSpec, load_machine
+from rigbox.plugins.statemachine.schema import MachineSpec
 
 POWER_MODE = Path(__file__).parent.parent / "examples" / "power_mode.yaml"
 
@@ -40,6 +40,7 @@ def ctx() -> Context:
 
 
 # --- coverage -----------------------------------------------------------------------------------------------
+
 
 def test_simulator_tracks_states_transitions_and_guard_outcomes() -> None:
     sim = Simulator(spec())
@@ -94,6 +95,7 @@ def test_coverage_file_accumulates_across_commands(ctx: Context, tmp_path: Path)
 
 # --- data generation ----------------------------------------------------------------------------------------
 
+
 def test_value_pools_use_boundaries_around_constants() -> None:
     pools = value_pools(spec(invariants=['mode == "x" or level < 3']))
     assert set(pools) == {"level", "mode"}  # reserved names are never generated as data
@@ -119,6 +121,7 @@ def test_format_steps_matches_simulate_input() -> None:
 
 # --- fuzzing ------------------------------------------------------------------------------------------------
 
+
 def test_fuzz_example_reaches_full_coverage_and_is_reproducible(ctx: Context) -> None:
     args = {"machine": str(POWER_MODE), "seed": 1, "runs": 200, "length": 30}
     rows = ctx.run("sm.fuzz", args)
@@ -128,7 +131,7 @@ def test_fuzz_example_reaches_full_coverage_and_is_reproducible(ctx: Context) ->
 
 def test_fuzz_finds_invariant_violation_and_reproduction_works(ctx: Context, tmp_path: Path) -> None:
     # Bug: the guard threshold (100) is higher than the safety requirement (90) in the invariant.
-    buggy = load_machine(POWER_MODE).model_dump(by_alias=True)
+    buggy = MachineSpec.load_from_file(POWER_MODE).model_dump(by_alias=True)
     buggy["transitions"][2]["guard"] = "temperature > 100"
     machine = tmp_path / "buggy.yaml"
     import yaml
@@ -152,7 +155,8 @@ def test_fuzz_reports_evaluation_errors(ctx: Context, tmp_path: Path) -> None:
     import yaml
 
     broken = {
-        "name": "B", "initial": "a",
+        "name": "B",
+        "initial": "a",
         "states": [{"name": "a"}, {"name": "b"}],
         "events": [{"name": "go"}],
         "transitions": [{"from": "a", "event": "go", "to": "b", "guard": "10 / x > 1 and x > 0"}],
@@ -167,7 +171,8 @@ def test_fuzz_still_saves_coverage_when_it_fails(ctx: Context, tmp_path: Path) -
     import yaml
 
     broken = {
-        "name": "B", "initial": "a",
+        "name": "B",
+        "initial": "a",
         "states": [{"name": "a"}, {"name": "b"}],
         "events": [{"name": "go"}],
         "transitions": [{"from": "a", "event": "go", "to": "b"}],

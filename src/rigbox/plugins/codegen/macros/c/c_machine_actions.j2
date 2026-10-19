@@ -1,0 +1,7 @@
+{% macro c_machine_actions(context) %}
+{% for transition in context.transitions %}
+{% for action in transition.actions %}
+void {{ action }}({{ context.name | lower }}_state_machine_t *state_machine);
+{% endfor %}
+{% endfor %}
+{% endmacro %}

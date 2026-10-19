@@ -8,6 +8,7 @@ import pytest
 from rigbox.core.context import Context
 from rigbox.core.plugins import load_all
 from rigbox.core.registry import NoArgs, Registry
+from rigbox.core.render import HumanReadableResponse, RigboxResponse
 from rigbox.core.workspace import Workspace
 from rigbox.repl import RigboxShell, build_shell
 
@@ -81,14 +82,26 @@ def test_format_is_a_setting(session: Session) -> None:
     assert session.shell.format == "json"  # rejected, unchanged
 
 
+def test_shell_selects_human_message_or_structured_data() -> None:
+    registry = Registry()
+
+    @registry.command("test.response", record=False)
+    def response_handler(ctx: Context, args: NoArgs) -> RigboxResponse:
+        return RigboxResponse({"ready": True}, HumanReadableResponse("Ready", "success"))
+
+    output = io.StringIO()
+    session = Session(build_shell(Context(registry), stdout=output), output)
+    assert session.run("test.response").strip() == "Ready"
+    session.run("set format json")
+    assert json.loads(session.run("test.response")) == [{"ready": True}]
+
+
 def test_exit_stops_the_shell_like_quit(session: Session) -> None:
     assert session.shell.onecmd_plus_hooks("exit") is True
     assert session.shell.onecmd_plus_hooks("quit") is True
 
 
-def test_tab_completes_commands_choices_options_and_files(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_tab_completes_commands_choices_options_and_files(session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "tone.wav").write_bytes(b"")
     (tmp_path / "notes.txt").write_text("", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -127,7 +140,7 @@ def test_workspace_plugins_become_shell_commands_and_do_not_leak_between_shells(
     assert hasattr(second.shell, "do_greeter.hello")
     assert not hasattr(make_session().shell, "do_greeter.hello")  # another registry, other commands
     first.run("set format json")
-    assert (first.shell.format, second.shell.format) == ("json", "table")  # settings belong to one shell
+    assert (first.shell.format, second.shell.format) == ("json", "human")  # settings belong to one shell
 
 
 def test_a_command_named_like_a_builtin_shell_command_is_refused() -> None:

@@ -26,6 +26,10 @@ def load_all(registry: Registry, workspace: Workspace | None = None) -> None:
     """Load every plugin and let each register its commands on `registry`.
 
     Failures are recorded in ``registry.plugins`` rather than raised.
+
+    Args:
+        registry (Registry): The registry where plugins should register their commands.
+        workspace (Workspace | None, optional): The workspace to look for workspace-local plugins. Defaults to None.
     """
     pm = pluggy.PluginManager(PluginConstants.PROJECT)
     pm.add_hookspecs(hooks)

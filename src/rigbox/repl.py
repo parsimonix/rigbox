@@ -8,21 +8,18 @@ from typing import Any, ClassVar, TextIO
 
 import cmd2
 
-import rigbox.constants as RigboxConstants
+from rigbox.constants import AppFiles, AppMetadata, RenderFormat
 from rigbox.core.cli_parser import parser_for
 from rigbox.core.context import Context
 from rigbox.core.registry import Command, CommandError
-from rigbox.core.render import render
 
 
 class RigboxShell(cmd2.Cmd):
     """The interactive REPL shell for Rigbox. Commands are registered with `build_shell`, not written here."""
 
-    format: ClassVar[str] = "table"
+    format: ClassVar[RenderFormat] = RenderFormat.PLAINTEXT
     """How command results are printed; change it with ``set format json``."""
-    _INTRO: ClassVar[str] = (
-        f"{RigboxConstants.AppMetadata.NAME} interactive shell. `help` lists commands, `<command> --help` shows its arguments, `exit` quits."
-    )
+    _INTRO: ClassVar[str] = f"{AppMetadata.NAME} interactive shell. `help` lists commands, `<command> --help` shows its arguments, `exit` quits."
 
     def __init__(self, ctx: Context, stdout: TextIO | None = None) -> None:
         """Initialize the RigboxShell.
@@ -34,7 +31,7 @@ class RigboxShell(cmd2.Cmd):
         history_file = ""
         if ctx.workspace is not None:
             ctx.workspace.data_dir.mkdir(exist_ok=True)
-            history_file = str(ctx.workspace.data_dir / RigboxConstants.Files.SHELL_HISTORY)
+            history_file = str(ctx.workspace.data_dir / AppFiles.SHELL_HISTORY)
         super().__init__(
             allow_cli_args=False,  # NOTE: The shell is started by invoking `rigbox`, whose own arguments are not shell commands
             persistent_history_file=history_file,
@@ -44,8 +41,8 @@ class RigboxShell(cmd2.Cmd):
             stdout=stdout,
         )
         self.ctx = ctx
-        self.prompt = f"{ctx.workspace.config.name if ctx.workspace else RigboxConstants.AppMetadata.NAME}> "
-        self.add_settable(cmd2.Settable("format", str, "Output format for command results", self, choices=RigboxConstants.OutputFormats.VALUES))
+        self.prompt = f"{ctx.workspace.config.name if ctx.workspace else AppMetadata.NAME}> "
+        self.add_settable(cmd2.Settable("format", RenderFormat, "Output format for command results", self, choices=sorted([fmt.value for fmt in RenderFormat])))
 
     def get_bottom_toolbar(self) -> str:
         """Get the text for the bottom toolbar beneath the shell prompt.
@@ -65,12 +62,14 @@ class RigboxShell(cmd2.Cmd):
             name (str): The name of the command to run.
             raw_args (dict[str, Any]): The raw arguments to pass to the command.
         """
+        self.ctx.fmt = self.format
+        self.ctx.output_stream = self.stdout
         try:
-            rows = self.ctx.run(name, raw_args)
+            response = self.ctx.run(name, raw_args)
         except CommandError as e:
             self.perror(f"error: {e}")
             return
-        text = render(rows, self.format)
+        text = response.render(self.format, stream=self.stdout)
         if text:
             self.poutput(text)
 

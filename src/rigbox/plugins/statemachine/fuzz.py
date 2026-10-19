@@ -1,4 +1,8 @@
-"""Seeded random-walk fuzzing: random events with boundary-value data, checking invariants after each step."""
+"""Fuzz state-machine models with seeded event sequences and boundary-focused data.
+
+Each sequence runs through the simulator, which checks guards and invariants after every event. A fixed seed makes
+failures reproducible.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ RESERVED = {"state", "prev_state", "event", "fired"}
 
 @dataclass
 class Failure:
-    """A fuzz run that broke an invariant or hit an error, with the events that led to it."""
+    """Record the first failure and reproducing event sequence from one fuzz run."""
 
     run: int
     kind: str  # "error" | "invariant"
@@ -30,6 +34,14 @@ class Failure:
 
 
 def _around(value: object) -> list[Any]:
+    """Build candidate values around a constant used in an expression.
+
+    Args:
+        value: The comparison constant.
+
+    Returns:
+        Nearby numeric or boolean values, or the original string value.
+    """
     if isinstance(value, bool):
         return [value, not value]
     if isinstance(value, (int, float)):
@@ -38,10 +50,14 @@ def _around(value: object) -> list[Any]:
 
 
 def value_pools(spec: MachineSpec, packet: StructManifest | None = None) -> dict[str, list[Any]]:
-    """Return candidate values per variable used in the machine's expressions.
+    """Build candidate values from expression boundaries and optional packet field types.
 
-    Values are boundaries around the constants each variable is compared with, narrowed to the type ranges of
-    `packet` when a packet manifest is given.
+    Args:
+        spec: The machine whose guards, matches, and invariants to inspect.
+        packet: Optional packet manifest that constrains generated field values.
+
+    Returns:
+        Candidate values keyed by expression variable name.
     """
     exprs = [t.guard for t in spec.transitions if t.guard] + list(spec.invariants)
     exprs += [e.match for e in spec.events if e.match]
@@ -77,12 +93,30 @@ def value_pools(spec: MachineSpec, packet: StructManifest | None = None) -> dict
 
 
 def format_steps(steps: list[tuple[str, dict[str, Any]]]) -> str:
-    """Steps in the form `sm.simulate --steps` accepts."""
+    """Format events and data as the YAML list accepted by `sm.simulate`.
+
+    Args:
+        steps: Event names paired with their data.
+
+    Returns:
+        A compact YAML representation of the steps.
+    """
     items = [{name: data} if data else name for name, data in steps]
     return yaml.safe_dump(items, default_flow_style=True, width=10**6).strip()
 
 
 def _failure_of(sim: Simulator, spec: MachineSpec, name: str, data: dict[str, Any]) -> tuple[str, str] | None:
+    """Run one event and check the machine's invariants afterward.
+
+    Args:
+        sim: The simulator to advance.
+        spec: The machine whose invariants to check.
+        name: The event to send.
+        data: Values supplied with the event.
+
+    Returns:
+        The failure kind and detail, or `None` if the step succeeds.
+    """
     prev = sim.state
     try:
         step = sim.send(name, data)
@@ -104,20 +138,44 @@ def fuzz(
     packet: StructManifest | None = None,
     coverage: Coverage | None = None,
 ) -> list[Failure]:
-    """Run `runs` random walks of up to `length` events each. A walk stops at its first failure."""
+    """Run seeded random walks and collect the first failure from each run.
+
+    Args:
+        spec: The machine to fuzz.
+        runs: Number of random walks to run.
+        length: Maximum number of events in each walk.
+        seed: Seed used to make the walks reproducible.
+        packet: Optional packet manifest that constrains generated field values.
+        coverage: Optional shared coverage to accumulate across runs.
+
+    Returns:
+        Failures found, each with the event sequence needed to reproduce it.
+    """
+    # Generate the random seed
     rng = random.Random(seed)
+    # Prepare the value pools for generating random event data
     pools = value_pools(spec, packet)
+    # Extract the event names from the machine specification
     events = [e.name for e in spec.events]
+    # Initialize the list to collect failures
     failures: list[Failure] = []
+    # Run each random walk
     for run in range(1, runs + 1):
+        # Initialize the simulator for this run
         sim = Simulator(spec, coverage)
+        # Initialize the list to record the steps taken in this run
         steps: list[tuple[str, dict[str, Any]]] = []
+        # Perform the random walk for the specified length
         for _ in range(length):
+            # Select a random event and generate its associated data
             name = rng.choice(events)
             data = {var: rng.choice(pool) for var, pool in pools.items()}
+            # Record the step and check for failures
             steps.append((name, data))
             found = _failure_of(sim, spec, name, data)
+            # If a failure is found, record it and stop the current run
             if found:
                 failures.append(Failure(run, found[0], found[1], steps))
                 break
+        # End of the current run; proceed to the next run if any
     return failures

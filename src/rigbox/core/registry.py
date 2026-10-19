@@ -5,10 +5,12 @@ from __future__ import annotations
 import difflib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pydantic import BaseModel
+from rich.console import RenderableType
 
+from rigbox.core.render import RigboxCmdResult
 from rigbox.core.transport import Transport, TransportFactory, TransportOptions, scheme_of
 
 if TYPE_CHECKING:
@@ -36,13 +38,13 @@ class NoArgs(BaseModel):
     """Args model for commands that take no arguments."""
 
 
-Row = BaseModel | Mapping[str, Any]
-"""One output row: a pydantic model or a mapping of column name to value."""
+StructuredData: TypeAlias = BaseModel | Mapping[str, Any]
+"""Structured data: a pydantic model or a mapping of keys to values."""
 
-CommandResult = Row | Sequence[Row] | None
-"""What a command handler returns: nothing, one row, or several rows."""
+CommandResult: TypeAlias = RigboxCmdResult | str | RenderableType | StructuredData | Sequence[StructuredData] | None
+"""A handler's explicit response, plaintext message, or legacy structured data."""
 
-Handler = Callable[["Context", Any], CommandResult]
+Handler: TypeAlias = Callable[["Context", Any], CommandResult]
 """A command handler. The second parameter is the command's own args model, so its type varies per command."""
 
 
@@ -103,6 +105,9 @@ class Registry:
     def add(self, command: Command) -> None:
         """Register `command`.
 
+        Args:
+            command (Command): The command to register.
+
         Raises:
             ValueError: If a command with the same name is already registered.
         """
@@ -111,11 +116,24 @@ class Registry:
         self._commands[command.name] = command
 
     def try_get(self, name: str) -> Command | None:
-        """Return the command called `name`, or None if there isn't one."""
+        """Return the command called `name`, or None if there isn't one.
+
+        Args:
+            name (str): The name of the command to retrieve.
+
+        Returns:
+            Command | None: The command if found, otherwise None.
+        """
         return self._commands.get(name)
 
     def get(self, name: str) -> Command:
         """Return the command called `name`.
+
+        Args:
+            name (str): The name of the command to retrieve.
+
+        Returns:
+            Command: The command if found.
 
         Raises:
             CommandError: If there is no such command (the message suggests close matches).
@@ -128,11 +146,19 @@ class Registry:
         return cmd
 
     def names(self) -> list[str]:
-        """Return all command names, sorted."""
+        """Return all command names, sorted.
+
+        Returns:
+            list[str]: The sorted list of all command names.
+        """
         return sorted(self._commands)
 
     def add_transport(self, scheme: str, factory: TransportFactory) -> None:
         """Register `factory` as the way to open URLs of the form ``<scheme>://...``.
+
+        Args:
+            scheme (str): The URL scheme to register the transport for.
+            factory (TransportFactory): The factory function to create the transport.
 
         Raises:
             ValueError: If the scheme is already registered.
@@ -144,6 +170,10 @@ class Registry:
 
     def open_transport(self, url: str, options: TransportOptions) -> Transport:
         """Open `url` with the transport registered for its scheme.
+
+        Args:
+            url (str): The URL to open.
+            options (TransportOptions): The options to pass to the transport factory.
 
         Raises:
             CommandError: If no transport handles the scheme, or opening fails.

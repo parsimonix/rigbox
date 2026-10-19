@@ -10,7 +10,7 @@ from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry
 from rigbox.plugins.manifests.build import build_codec, build_model, model_source
 from rigbox.plugins.manifests.check import diff, lint
-from rigbox.plugins.manifests.schema import StructManifest, load_manifest
+from rigbox.plugins.manifests.schema import StructManifest
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "sensor_report.yaml"
 
@@ -54,13 +54,13 @@ def test_schema_rejects_duplicates_and_empty() -> None:
 
 
 def test_layout_is_packed() -> None:
-    m = load_manifest(EXAMPLE)
+    m = StructManifest.load_from_file(EXAMPLE)
     assert m.offsets() == [0, 2, 6, 7, 15, 23]
     assert m.size == 25
 
 
 def test_generated_model_enforces_ranges_and_lengths() -> None:
-    Model = build_model(load_manifest(EXAMPLE))
+    Model = build_model(StructManifest.load_from_file(EXAMPLE))
     good = dict(id=1, temperature=1.5, ok=True, label="n", samples=[0, 0, 0, 0], blob=b"ab")
     assert Model(**good).model_dump()["id"] == 1
     bad_values = (
@@ -78,7 +78,7 @@ def test_generated_model_enforces_ranges_and_lengths() -> None:
 
 
 def test_generated_source_is_valid_python() -> None:
-    compile(model_source(load_manifest(EXAMPLE)), "generated.py", "exec")
+    compile(model_source(StructManifest.load_from_file(EXAMPLE)), "generated.py", "exec")
 
 
 @pytest.mark.parametrize("endian,expected", [("little", "0201"), ("big", "0102")])
@@ -93,7 +93,12 @@ def test_encode_decode_roundtrip(ctx: Context) -> None:
     assert packed["size"] == 25
     decoded = ctx.run("manifest.decode", {"manifest": str(EXAMPLE), "hex": packed["hex"]})[0]
     assert decoded == {
-        "id": 258, "temperature": 2.5, "ok": True, "label": "node1", "samples": [1, -2, 3, 4], "blob": "dead",
+        "id": 258,
+        "temperature": 2.5,
+        "ok": True,
+        "label": "node1",
+        "samples": [1, -2, 3, 4],
+        "blob": "dead",
     }
 
 
@@ -107,7 +112,7 @@ def test_encode_decode_errors(ctx: Context) -> None:
 
 
 def test_lint_rules() -> None:
-    issues = lint(load_manifest(EXAMPLE))
+    issues = lint(StructManifest.load_from_file(EXAMPLE))
     assert {(i.rule, i.field) for i in issues} == {("no-description", "blob")}
     bare = lint(manifest(fields=[{"name": "t", "type": "f32"}]))
     assert {i.rule for i in bare} == {"no-description", "no-unit"}
@@ -117,9 +122,7 @@ def test_diff_classifies_changes() -> None:
     old = manifest()
     assert diff(old, old) == []
 
-    doc_only = manifest(
-        description="new", fields=[{"name": "a", "type": "u16", "unit": "ms"}, {"name": "b", "type": "u8"}]
-    )
+    doc_only = manifest(description="new", fields=[{"name": "a", "type": "u16", "unit": "ms"}, {"name": "b", "type": "u8"}])
     assert [c.breaking for c in diff(old, doc_only)] == [False, False]
 
     widened = manifest(fields=[{"name": "a", "type": "u32"}, {"name": "b", "type": "u8"}])
@@ -151,4 +154,4 @@ def test_invalid_manifest_file_reports_readable_error(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
     bad.write_text("name: Pkt\nfields: []\n", encoding="utf-8")
     with pytest.raises(CommandError, match="bad.yaml"):
-        load_manifest(bad)
+        StructManifest.load_from_file(bad)

@@ -1,4 +1,5 @@
 name: PowerMode
+version: 1.0.0
 description: Power states of the sensor node.
 initial: idle
 state_field: mode          # packet field holding the device's own state (see power_report.yaml)

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from rigbox.core.context import Context
 from rigbox.core.registry import CommandError
+from rigbox.core.render import RigboxResponse
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -68,20 +69,26 @@ def _lookup(name: str, variables: dict[str, Any]) -> object:
     return variables[name]
 
 
-def run_workflow(
-    ctx: Context, wf: Workflow, overrides: dict[str, Any] | None = None
-) -> list[dict[str, Any]]:
-    """Run steps in order, stopping at the first failure, and return the last step's rows.
+def run_workflow(ctx: Context, wf: Workflow, overrides: dict[str, Any] | None = None) -> RigboxResponse:
+    """Run workflow steps and return the final step's response.
+
+    Args:
+        ctx: The execution context shared by the steps.
+        wf: The workflow to execute.
+        overrides: Variable values that override the workflow defaults.
+
+    Returns:
+        The final response, or an empty response for an empty workflow.
 
     Raises:
         CommandError: If a step fails; the message names the workflow and step.
     """
     variables = {**wf.vars, **(overrides or {})}
-    rows: list[dict[str, Any]] = []
+    response = RigboxResponse()
     for i, step in enumerate(wf.steps, 1):
         ctx.log(f"[{i}/{len(wf.steps)}] {step.run}")
         try:
-            rows = ctx.run(step.run, cast("dict[str, Any]", substitute(step.args, variables)))
+            response = ctx.run(step.run, cast("dict[str, Any]", substitute(step.args, variables)))
         except CommandError as e:
             raise CommandError(f"workflow '{wf.name}' failed at step {i} ({step.run}): {e}") from None
-    return rows
+    return response

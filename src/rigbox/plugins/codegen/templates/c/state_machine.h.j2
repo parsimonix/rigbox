@@ -1,0 +1,42 @@
+{% from "macros/c/c_autogen_banner_state_machine.j2" import c_autogen_banner_state_machine %}
+{% from "macros/c/c_machine_constants.j2" import c_machine_constants %}
+{% from "macros/c/c_machine_errors.j2" import c_machine_errors %}
+{% from "macros/c/c_machine_events.j2" import c_machine_events %}
+{% from "macros/c/c_machine_state_table_entry.j2" import c_machine_state_table_entry %}
+{% from "macros/c/c_machine_states.j2" import c_machine_states %}
+{% from "macros/c/c_machine_struct.j2" import c_machine_struct %}
+{% from "macros/c/c_machine_version.j2" import c_machine_version %}
+{% from "macros/c/c_machine_state_transition_table.j2" import c_machine_state_transition_table %}
+{% from "macros/c/c_machine_actions.j2" import c_machine_actions %}
+{{ c_autogen_banner_state_machine(context) }}
+#ifndef {{ context.header_guard }}
+#define {{ context.header_guard }}
+
+#include <stdint.h>
+#include <stddef.h>
+
+{{ c_machine_version(context) }}
+
+// CONSTANTS
+{{ c_machine_constants(context) }}
+
+// STATES
+{{ c_machine_states(context) }}
+
+// EVENTS
+{{ c_machine_events(context) }}
+
+// ERRORS
+{{ c_machine_errors(context) }}
+
+{{ c_machine_struct(context) }}
+
+{{ c_machine_state_table_entry(context, 3) }}
+
+// ACTIONS
+{{ c_machine_actions(context) }}
+
+// STATE TABLE
+{{ c_machine_state_transition_table(context) }}
+
+#endif // {{ context.header_guard }}

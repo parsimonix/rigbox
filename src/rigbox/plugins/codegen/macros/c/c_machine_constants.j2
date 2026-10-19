@@ -1,0 +1,5 @@
+{% macro c_machine_constants(context) %}
+{% for constant_name, constant_value in context.constants.items() %}
+#define {{ constant_name | upper }} {{ constant_value }}
+{% endfor %}
+{% endmacro %}

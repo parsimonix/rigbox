@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from rigbox.core.cli_parser import path_field
 from rigbox.core.context import Context
 from rigbox.core.registry import CommandError, NoArgs, Registry
+from rigbox.core.render import RigboxResponse
 from rigbox.core.workflow import Step, Workflow, load_workflow, run_workflow, save_workflow
 from rigbox.hooks import hookimpl
 from rigbox.plugins.plugin_template import PLUGIN_NAME, render_plugin
@@ -69,19 +70,12 @@ def rigbox_register(registry: Registry) -> None:
     @registry.command("commands", args=CommandsArgs, record=False)
     def commands(ctx: Context, args: CommandsArgs) -> list[dict[str, Any]]:
         """List the commands (use `<command> --help` for one command's arguments)."""
-        return [
-            {"command": name, "summary": ctx.registry.get(name).help}
-            for name in ctx.registry.names()
-            if name.startswith(args.prefix)
-        ]
+        return [{"command": name, "summary": ctx.registry.get(name).help} for name in ctx.registry.names() if name.startswith(args.prefix)]
 
     @registry.command("plugins.list", record=False)
     def plugins_list(ctx: Context, args: NoArgs) -> list[dict[str, Any]]:
         """List loaded plugins and their commands."""
-        return [
-            {"plugin": p.name, "source": p.source, "commands": len(p.commands), "error": p.error}
-            for p in ctx.registry.plugins
-        ]
+        return [{"plugin": p.name, "source": p.source, "commands": len(p.commands), "error": p.error} for p in ctx.registry.plugins]
 
     @registry.command("plugin.new", args=PluginNewArgs, record=False)
     def plugin_new(ctx: Context, args: PluginNewArgs) -> dict[str, str]:
@@ -119,7 +113,7 @@ def rigbox_register(registry: Registry) -> None:
         return {"saved": str(path), "steps": len(steps)}
 
     @registry.command("workflow.run", args=WorkflowRunArgs, record=False)
-    def workflow_run(ctx: Context, args: WorkflowRunArgs) -> list[dict[str, Any]]:
+    def workflow_run(ctx: Context, args: WorkflowRunArgs) -> RigboxResponse:
         """Run a declarative workflow file."""
         overrides: dict[str, Any] = {}
         for item in args.var:

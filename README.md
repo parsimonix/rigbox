@@ -25,7 +25,8 @@ rigbox run --format json demo.echo hi --times 2
 rigbox script workflows\x.yaml --var key=value
 ```
 
-Output is a table on a terminal and NDJSON when piped.
+Output is a human message (or a table for data-only commands) on a terminal and NDJSON when piped.
+Select `--format human`, `table`, `json`, or `ndjson` explicitly when needed.
 
 ### The shell
 
@@ -36,7 +37,7 @@ commands work too:
 ```
 rigbox> help                           # commands grouped by area; `help dsp.gen` or `dsp.gen --help` for one
 rigbox> dsp.gen sine tone.wav --seconds 1
-rigbox> set format json                # print results as JSON (table, json, ndjson)
+rigbox> set format json                # print results as JSON (human, table, json, ndjson, auto)
 rigbox> alias create tone dsp.gen sine # then: tone out.wav
 rigbox> device.transports | findstr replay      # pipe to a shell command
 rigbox> dsp.inspect tone.wav > report.txt       # redirect to a file
@@ -85,12 +86,26 @@ rigbox> device.ports
 rigbox> device.connect dut loop://
 rigbox> device.send dut --manifest examples\sensor_report.yaml --values "{id: 1, temperature: 2.5, ok: true, label: n1, samples: [1,2,3,4], blob: dead}"
 rigbox> device.expect dut --manifest examples\sensor_report.yaml
+rigbox> device.request dut --hex "01 02" --response-size 2 --timeout 1
 rigbox> device.capture dut --manifest examples\sensor_report.yaml --seconds 10 --count 50
 rigbox> device.close dut
 ```
 
 `device.capture` writes timestamped NDJSON (`ts`, `dir`, `hex`, `decoded` or `error`) to the workspace `captures/`
-folder. Packets are read as exactly manifest-sized (or `--size`) chunks; there is no framing layer yet.
+folder. Sessions assemble partial reads into manifest-sized (or `--size`) packets using one overall read deadline.
+Timeouts and end-of-stream errors include any partial bytes. Variable-length framing (COBS, SLIP, length prefixes)
+is not implemented; incomplete packets are consumed, not buffered for the next command.
+
+`device.request` uses the same `--hex` or `--manifest`/`--values` inputs as `device.send`. Select the response with
+exactly one of `--response-size` or `--response-manifest`; a response manifest also decodes it. The write and reply
+read are serialized as one session operation. The response `--timeout` starts after writing; lock acquisition has
+its own wait bounded by that timeout. Buffered input is retained, so this is not response correlation. Failed writes
+are never automatically retried.
+
+For serial, loopback and socket transports, writes default to the connection's `--timeout`; set `--write-timeout`
+on `device.connect` to use a separate deadline. Writes do not flush or wait for device acknowledgement. Pyserial's
+RFC2217 handler does not support configurable write deadlines: it keeps its native behavior and rejects an explicit
+`--write-timeout`. Context shutdown attempts every connection's cleanup and reports failures on stderr.
 
 Replaying a capture lets you rehearse the rest of the toolbox without hardware:
 
@@ -102,8 +117,10 @@ rigbox> device.capture rec --manifest examples\sensor_report.yaml --out again.nd
 ### Writing a transport
 
 A transport is any object with `write(data)`, `read(size, timeout)`, `read_chunk(timeout)` and `close()` (the
-`Transport` protocol in `rigbox/core/transport.py`; raise `EOFError` from the read methods if the stream has ended for
-good). A plugin registers a factory for a scheme, and users then connect with `<scheme>://...`:
+`Transport` protocol in `rigbox/core/transport.py`). Reads may return partial data; return empty bytes on timeout,
+raise `EOFError` when the stream has permanently ended, and raise `OSError` on communication failure. Writes must
+send every byte or raise, and cleanup should be idempotent. A plugin registers a factory for a scheme, and users
+then connect with `<scheme>://...`:
 
 ```python
 from rigbox.core.registry import Registry
@@ -123,6 +140,10 @@ def rigbox_register(registry: Registry) -> None:
 ```
 
 `options.params` carries any `--param key=value` the user passed to `device.connect`.
+`Connection` owns packet assembly, user-facing I/O errors, locking and cleanup, and can also be used as a Python
+context manager. Keep framing and codecs out of transport implementations. HID reports or BLE notifications need
+an explicit stream adaptation that preserves their protocol's identifiers and boundaries; they are not automatically
+interchangeable byte streams. No Rigbox background reader threads or queues are introduced.
 
 ## State machines
 
@@ -130,12 +151,33 @@ A state machine manifest lists states, events and guarded transitions (see `exam
 event `match` expressions are safe expressions over data, such as `temperature > 90 and mode == "running"`.
 
 ```powershell
-rigbox run sm.check examples\power_mode.yaml      # unreachable states, dead ends, shadowed transitions, no safe path
+rigbox run sm.check examples\power_mode.yaml      # structural findings, including closed cycles and required events
 rigbox run sm.show examples\power_mode.yaml       # transition table
 rigbox run --format ndjson sm.render examples\power_mode.yaml   # Mermaid text (or --out file.mmd)
 rigbox run sm.simulate examples\power_mode.yaml "[start, {overheat: {temperature: 95}}, reset]"
 rigbox run sm.replay examples\power_mode.yaml captures\run1.ndjson --only-problems
+rigbox run codegen.state_machine examples\power_mode.yaml   # C header with state and event enums
 ```
+
+`sm.check` returns a `findings` list whose entries contain `level`, `rule`, `subject`, and `message`. If there are none,
+the list is empty and human output reports success (green in Rich mode). It ignores guards: a path or
+declared transition is not proof that its conditions can be satisfied. Existing severities are unchanged.
+`trapping-component` warns about a reachable closed cycle with no safe state, excluding the component containing
+the initial state (the machine's entire operating cycle). Dead ends are reported separately.
+
+`codegen.state_machine` writes a C header containing declaration-order state and event enums. It does not yet generate
+transition execution, guards, or action implementations. Existing output files are protected unless `--force` is set.
+
+To require an event handler in a state, add `required_events` to that state's declaration:
+
+```yaml
+- name: running
+    required_events: [stop, trip]
+```
+
+Names must refer to declared events. Missing outgoing transitions produce `missing-required-event` errors;
+wildcard and list sources count, as do guarded transitions. This checks declaration coverage, not guard coverage.
+Events not listed remain optional. Findings are returned as data; they do not change the command's exit status.
 
 Coverage and fuzzing:
 
@@ -154,6 +196,12 @@ breaks or a guard can't be evaluated. The seed is always printed, so any run can
 `sm.replay` takes a `device.capture` file, turns each decoded packet into an event using the events' `match`
 expressions, and reports where the device's own state (the `state_field` packet field) differs from the model.
 After a divergence the model adopts the device's state, so later mismatches stand alone.
+
+State-machine commands provide plaintext details, Rich output, and structured envelopes such as `transitions`,
+`findings`, `steps`, and `coverage`. JSON returns an array containing the envelope; NDJSON emits one aggregate record,
+not one line per nested item. Replay returns `rows` plus `records`, `diverged`, `skipped`, and `errors` totals before
+filtering. `--only-problems` retains divergences, skipped records, and event-processing errors. Divergences and skipped
+records produce warning-level results; processing errors produce error-level results without changing the exit status.
 
 ## DSP
 
@@ -234,8 +282,11 @@ def rigbox_register(registry: Registry) -> None:
         return {"greeting": f"hello, {args.who}"}
 ```
 
-Commands take a pydantic args model, return rows (a dict, a model, or a list of them), and raise `CommandError` for
-user mistakes. Contributors adding to the repo itself can use the project skills in `.claude/skills/`
+Commands take a pydantic args model and may return a `RigboxResponse` containing structured data and an optional
+`HumanReadableResponse(text, type)` message (both from `rigbox.core.render`). Plain dict/model/list results remain
+supported and fall back to tables in human mode. `Context.run(...)` returns a response, not a list; access
+`.structured_data` for normalized rows. Raise `CommandError` for user mistakes.
+Contributors adding to the repo itself can use the project skills in `.claude/skills/`
 (`onboard-me`, `add-plugin`, `add-command`).
 
 ## Layout

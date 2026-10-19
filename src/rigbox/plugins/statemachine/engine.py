@@ -1,4 +1,8 @@
-"""Run a machine: `transitions` does the state handling, simpleeval evaluates guard/match expressions."""
+"""Simulate state-machine events and track their transition and guard outcomes.
+
+The `transitions` library manages state changes, while `simpleeval` evaluates guard and match expressions against
+event data.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,13 @@ from rigbox.plugins.statemachine.schema import MachineSpec, Transition
 def evaluate(expr: str, data: dict[str, Any]) -> bool:
     """Evaluate a guard/match expression against event data.
 
+    Args:
+        expr: The expression to evaluate.
+        data: Names and values available to the expression.
+
+    Returns:
+        The expression's truth value.
+
     Raises:
         CommandError: If the expression can't be evaluated.
     """
@@ -27,7 +38,15 @@ def evaluate(expr: str, data: dict[str, Any]) -> bool:
 
 
 def matches(expr: str, data: dict[str, Any]) -> bool:
-    """Like `evaluate`, but an expression that can't be evaluated (e.g. missing field) simply doesn't match."""
+    """Treat an expression that cannot be evaluated as a non-match.
+
+    Args:
+        expr: The expression to evaluate.
+        data: Names and values available to the expression.
+
+    Returns:
+        Whether the expression evaluates to true; evaluation errors return false.
+    """
     try:
         return evaluate(expr, data)
     except CommandError:
@@ -35,7 +54,7 @@ def matches(expr: str, data: dict[str, Any]) -> bool:
 
 
 class Step(BaseModel):
-    """The outcome of sending one event to the simulator."""
+    """Describe the outcome of sending one event to the simulator."""
 
     event: str
     from_state: str
@@ -46,17 +65,22 @@ class Step(BaseModel):
 
 
 class _Model:
-    """Holds the `state` attribute that transitions manages."""
+    """Provide the state and trigger attributes required by `transitions`."""
 
     state: str
     trigger: Callable[..., bool]  # `transitions` adds a trigger() method to the model
 
 
 class Simulator:
-    """Runs one machine and tracks coverage; pass `coverage` to accumulate across several simulators."""
+    """Simulate machine transitions and track coverage across events."""
 
     def __init__(self, spec: MachineSpec, coverage: Coverage | None = None) -> None:
-        """Build the underlying `transitions` machine for `spec`."""
+        """Build a simulator for the machine specification.
+
+        Args:
+            spec: The machine to simulate.
+            coverage: Optional shared coverage to accumulate across simulators.
+        """
         self.spec = spec
         self.coverage = coverage if coverage is not None else Coverage(machine=spec.name)
         self.coverage.states.add(spec.initial)
@@ -80,6 +104,14 @@ class Simulator:
             )
 
     def _guard(self, t: Transition) -> Callable[[dict[str, Any] | None], bool]:
+        """Create a callback that evaluates and records this transition's guard.
+
+        Args:
+            t: The guarded transition.
+
+        Returns:
+            A callback for the underlying state-machine engine.
+        """
         expr = t.guard or ""  # only called for guarded transitions
 
         def guard(data: dict[str, Any] | None = None) -> bool:
@@ -90,6 +122,15 @@ class Simulator:
         return guard
 
     def _recorder(self, t: Transition) -> Callable[[dict[str, Any] | None], None]:
+        """Create a callback that records a fired transition and its coverage.
+
+        Args:
+            t: The transition to record.
+
+        Returns:
+            A callback for the underlying state-machine engine.
+        """
+
         def record(data: dict[str, Any] | None = None) -> None:
             self._fired = t
             self.coverage.transitions.add(transition_key(self._before, t))
@@ -98,19 +139,34 @@ class Simulator:
 
     @property
     def state(self) -> str:
-        """The machine's current state name."""
+        """Return the machine's current state name.
+
+        Returns:
+            The current state.
+        """
         return self._model.state
 
     def set_state(self, name: str) -> None:
-        """Force the machine into state `name` without firing a transition."""
+        """Set the current state without firing a transition.
+
+        Args:
+            name: The state to enter.
+        """
         self._machine.set_state(name, model=self._model)
         self.coverage.states.add(name)
 
     def send(self, event: str, data: dict[str, Any] | None = None) -> Step:
-        """Send `event` with optional `data` and report what happened.
+        """Process one event and report whether a transition fired.
+
+        Args:
+            event: The event to send.
+            data: Values available to transition guards.
+
+        Returns:
+            The event's source state, outcome, and resulting state.
 
         Raises:
-            CommandError: If the event isn't defined or a guard can't be evaluated.
+            CommandError: If the event is unknown or a guard can't be evaluated.
         """
         if event not in self._events:
             raise CommandError(f"unknown event: {event}")
