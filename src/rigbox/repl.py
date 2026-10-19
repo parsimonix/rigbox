@@ -17,7 +17,7 @@ from rigbox.core.registry import Command, CommandError
 class RigboxShell(cmd2.Cmd):
     """The interactive REPL shell for Rigbox. Commands are registered with `build_shell`, not written here."""
 
-    format: ClassVar[RenderFormat] = RenderFormat.PLAINTEXT
+    format: ClassVar[RenderFormat] = RenderFormat.RICH
     """How command results are printed; change it with ``set format json``."""
     _INTRO: ClassVar[str] = f"{AppMetadata.NAME} interactive shell. `help` lists commands, `<command> --help` shows its arguments, `exit` quits."
 

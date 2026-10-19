@@ -5,20 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-CONFIG_NAME = "rigbox.yaml"
+from rigbox.constants import AppFiles
 
 
 class WorkspaceConfig(BaseModel):
     """Contents of ``rigbox.yaml``: workspace name and directory layout."""
 
-    name: str
-    version: int = 1
-    plugins_dir: str = "plugins"
-    workflows_dir: str = "workflows"
-    manifests_dir: str = "manifests"
-    captures_dir: str = "captures"
+    name: str = Field(..., description="The name of the workspace")
+    version: int = Field(1, description="The version of the workspace")
+    plugins_dir: str = Field("plugins", description="Directory for workspace-local plugin modules")
+    workflows_dir: str = Field("workflows", description="Directory for saved workflows")
+    manifests_dir: str = Field("manifests", description="Directory for data manifests")
+    captures_dir: str = Field("captures", description="Directory for device captures")
 
 
 class Workspace:
@@ -65,7 +65,7 @@ class Workspace:
     @classmethod
     def load(cls, root: Path) -> Workspace:
         """Load the workspace rooted at `root` from its ``rigbox.yaml``."""
-        data = yaml.safe_load((root / CONFIG_NAME).read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load((root / AppFiles.WORKSPACE_CONFIG).read_text(encoding="utf-8")) or {}
         return cls(root, WorkspaceConfig.model_validate(data))
 
     @classmethod
@@ -73,7 +73,7 @@ class Workspace:
         """Find the workspace containing `start` by searching it and its parents, or return None."""
         start = start.resolve()
         for d in (start, *start.parents):
-            if (d / CONFIG_NAME).is_file():
+            if (d / AppFiles.WORKSPACE_CONFIG).is_file():
                 return cls.load(d)
         return None
 
@@ -85,13 +85,11 @@ class Workspace:
             FileExistsError: If `root` already contains a ``rigbox.yaml``.
         """
         root = root.resolve()
-        if (root / CONFIG_NAME).exists():
-            raise FileExistsError(f"{CONFIG_NAME} already exists in {root}")
+        if (root / AppFiles.WORKSPACE_CONFIG).exists():
+            raise FileExistsError(f"{AppFiles.WORKSPACE_CONFIG} already exists in {root}")
         root.mkdir(parents=True, exist_ok=True)
         ws = cls(root, WorkspaceConfig(name=name or root.name))
-        (root / CONFIG_NAME).write_text(
-            yaml.safe_dump(ws.config.model_dump(), sort_keys=False), encoding="utf-8"
-        )
+        (root / AppFiles.WORKSPACE_CONFIG).write_text(yaml.safe_dump(ws.config.model_dump(), sort_keys=False), encoding="utf-8")
         for d in (ws.plugins_dir, ws.workflows_dir, ws.manifests_dir, ws.captures_dir):
             d.mkdir(exist_ok=True)
         (root / ".gitignore").write_text(".rigbox/\n", encoding="utf-8")

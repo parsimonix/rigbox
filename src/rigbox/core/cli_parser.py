@@ -30,6 +30,10 @@ from rigbox.core.registry import Command, UsageError
 def path_field(default: Any = ..., **kwargs: Any) -> Any:  # noqa: ANN401 - mirrors pydantic's Field()
     """Declare a ``str`` argument that holds a file path, so the shell can tab-complete file names for it.
 
+    This exists because some fields may represent both a file path
+    and other types of string data, and we want the shell to provide
+    tab-completion for the file path case.
+
     Takes the same arguments as pydantic's ``Field``; with no default the argument is required.
     """
     return Field(default, json_schema_extra={"path": True}, **kwargs)

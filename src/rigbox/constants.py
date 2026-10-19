@@ -18,6 +18,7 @@ class AppFiles:
     """Namespace class for file-related constants."""
 
     SHELL_HISTORY: Final[str] = "shell_history.json"
+    WORKSPACE_CONFIG: Final[str] = "rigbox.yaml"
 
 
 class RenderFormat(StrEnum):

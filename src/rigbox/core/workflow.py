@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from rigbox.core.context import Context
 from rigbox.core.registry import CommandError
-from rigbox.core.render import RigboxResponse
+from rigbox.core.render import RigboxCmdResult
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -69,7 +69,7 @@ def _lookup(name: str, variables: dict[str, Any]) -> object:
     return variables[name]
 
 
-def run_workflow(ctx: Context, wf: Workflow, overrides: dict[str, Any] | None = None) -> RigboxResponse:
+def run_workflow(ctx: Context, wf: Workflow, overrides: dict[str, Any] | None = None) -> RigboxCmdResult:
     """Run workflow steps and return the final step's response.
 
     Args:
@@ -84,7 +84,7 @@ def run_workflow(ctx: Context, wf: Workflow, overrides: dict[str, Any] | None = 
         CommandError: If a step fails; the message names the workflow and step.
     """
     variables = {**wf.vars, **(overrides or {})}
-    response = RigboxResponse()
+    response = RigboxCmdResult.empty()
     for i, step in enumerate(wf.steps, 1):
         ctx.log(f"[{i}/{len(wf.steps)}] {step.run}")
         try:
