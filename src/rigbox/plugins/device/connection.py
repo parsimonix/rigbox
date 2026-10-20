@@ -8,6 +8,7 @@ from math import isfinite
 from threading import RLock
 from time import monotonic
 from types import TracebackType
+from typing import Self
 
 from rigbox.core.registry import CommandError
 from rigbox.core.transport import Transport, TransportOptions, scheme_of
@@ -16,7 +17,9 @@ from rigbox.core.transport import Transport, TransportOptions, scheme_of
 class Connection:
     """Own an open transport and serialize access without a background reader."""
 
-    def __init__(self, name: str, url: str, transport: Transport, options: TransportOptions) -> None:
+    def __init__(
+        self, name: str, url: str, transport: Transport, options: TransportOptions
+    ) -> None:
         """Wrap an already opened `transport` (see `Registry.open_transport`)."""
         self.name: str = name
         self.url: str = url
@@ -25,7 +28,7 @@ class Connection:
         self._closed: bool = False
         self._lock: RLock = RLock()
 
-    def __enter__(self) -> Connection:
+    def __enter__(self) -> Self:
         """Return the open session for use in a context manager."""
         self._ensure_open()
         return self
@@ -95,7 +98,9 @@ class Connection:
             try:
                 return self.transport.read_chunk(remaining)
             except OSError as error:
-                raise CommandError(f"cannot read from '{self.name}': {error}") from error
+                raise CommandError(
+                    f"cannot read from '{self.name}': {error}"
+                ) from error
 
     def close(self) -> None:
         """Close the owned transport once; allow retrying a failed close."""
@@ -144,11 +149,15 @@ class Connection:
             except EOFError:
                 return bytes(data), True
             except OSError as error:
-                raise CommandError(f"cannot read from '{self.name}': {error}") from error
+                raise CommandError(
+                    f"cannot read from '{self.name}': {error}"
+                ) from error
             if not chunk:
                 break
             if len(chunk) > size - len(data):
-                raise CommandError(f"transport for '{self.name}' returned more bytes than requested")
+                raise CommandError(
+                    f"transport for '{self.name}' returned more bytes than requested"
+                )
             data.extend(chunk)
         return bytes(data), False
 
@@ -156,5 +165,7 @@ class Connection:
         data, ended = self._read(size, timeout)
         if len(data) != size:
             reason = "stream ended" if ended else "timeout"
-            raise CommandError(f"{reason}: got {len(data)} of {size} bytes ({data.hex()})")
+            raise CommandError(
+                f"{reason}: got {len(data)} of {size} bytes ({data.hex()})"
+            )
         return data
