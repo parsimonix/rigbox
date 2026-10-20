@@ -11,11 +11,11 @@ import pytest
 
 from rigbox.core.context import Context
 from rigbox.core.registry import CommandError, Registry
-from rigbox.core.transport import TransportOptions
 from rigbox.plugins.device import connection as connection_module
 from rigbox.plugins.device import serial_transport as serial_module
 from rigbox.plugins.device.connection import Connection
 from rigbox.plugins.device.serial_transport import SerialTransport
+from rigbox.plugins.device.transport import TransportOptions
 
 
 class StubTransport:

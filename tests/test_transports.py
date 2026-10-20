@@ -6,8 +6,9 @@ import pytest
 from rigbox.core.context import Context
 from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry
-from rigbox.core.transport import DEFAULT_SCHEME, Transport, TransportOptions, scheme_of
 from rigbox.core.workspace import Workspace
+from rigbox.plugins.device.registry import DeviceRegistry
+from rigbox.plugins.device.transport import DEFAULT_SCHEME, Transport, TransportOptions, scheme_of
 
 EXAMPLE = str(Path(__file__).parent.parent / "examples" / "sensor_report.yaml")
 VALUES = "{id: %d, temperature: 2.5, ok: true, label: node1, samples: [1,-2,3,4], blob: dead}"
@@ -15,8 +16,9 @@ VALUES = "{id: %d, temperature: 2.5, ok: true, label: node1, samples: [1,-2,3,4]
 # A third-party transport, supplied by a workspace plugin: it answers every write with the same bytes reversed.
 STUB_PLUGIN = '''
 from rigbox.core.registry import Registry
-from rigbox.core.transport import Transport, TransportOptions
 from rigbox.hooks import hookimpl
+from rigbox.plugins.device.registry import DeviceRegistry
+from rigbox.plugins.device.transport import Transport, TransportOptions
 
 SEEN: list[TransportOptions] = []
 
@@ -49,7 +51,7 @@ def open_reverse(url: str, options: TransportOptions) -> Transport:
 
 @hookimpl
 def rigbox_register(registry: Registry) -> None:
-    registry.add_transport("reverse", open_reverse)
+    registry.extension(DeviceRegistry).add_transport("reverse", open_reverse)
 '''
 
 
@@ -83,14 +85,15 @@ def test_builtin_transports_are_listed_with_descriptions(ctx: Context) -> None:
 
 
 def test_registry_rejects_duplicate_and_unknown_schemes(ctx: Context) -> None:
+    devices = ctx.registry.extension(DeviceRegistry)
     with pytest.raises(ValueError, match="duplicate transport scheme: loop"):
-        ctx.registry.add_transport("LOOP", lambda url, options: ctx.registry.open_transport("loop://", options))
+        devices.add_transport("LOOP", lambda url, options: devices.open_transport("loop://", options))
     with pytest.raises(CommandError, match=r"known schemes: loop, replay, rfc2217, serial, socket"):
-        ctx.registry.open_transport("nope://", TransportOptions())
+        devices.open_transport("nope://", TransportOptions())
 
 
 def test_factory_failures_never_escape_as_raw_exceptions() -> None:
-    reg = Registry()
+    reg = DeviceRegistry()
 
     def broken(url: str, options: TransportOptions) -> Transport:
         raise RuntimeError("boom")
@@ -164,13 +167,14 @@ def test_third_party_plugin_can_add_a_transport(tmp_path: Path) -> None:
 def test_connect_passes_options_and_rejects_bad_params() -> None:
     reg = Registry()
     load_all(reg)
+    devices = reg.extension(DeviceRegistry)
     seen: list[TransportOptions] = []
 
     def recording(url: str, options: TransportOptions) -> Transport:
         seen.append(options)
-        return reg.open_transport("loop://", options)
+        return devices.open_transport("loop://", options)
 
-    reg.add_transport("rec", recording)
+    devices.add_transport("rec", recording)
     ctx = Context(registry=reg)
     ctx.run("device.connect", {"name": "a", "url": "rec://", "baud": 9600, "timeout": 0.5, "param": ["k=v", "e=a=b"]})
     assert seen == [TransportOptions(timeout=0.5, baud=9600, params={"k": "v", "e": "a=b"})]

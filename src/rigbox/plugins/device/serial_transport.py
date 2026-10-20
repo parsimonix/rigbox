@@ -8,7 +8,7 @@ from typing import ClassVar
 import serial
 
 from rigbox.core.registry import CommandError
-from rigbox.core.transport import Transport, TransportOptions, scheme_of
+from rigbox.plugins.device.transport import Transport, TransportOptions, scheme_of
 
 
 class SerialTransport:

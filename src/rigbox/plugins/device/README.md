@@ -1,8 +1,8 @@
 # Devices
 
 The device plugin opens named connections and provides `device.send`, `device.expect`, `device.request`,
-`device.capture`, and connection management. It can encode and decode packets with manifests. List available
-connection types with `device.transports`.
+`device.capture`, and connection management. List communication channels with `device.transports` and message
+formats with `device.protocols`. Manifests encode/decode application payloads independently of protocol framing.
 
 Connections use a URL to choose a **transport**:
 
@@ -21,7 +21,11 @@ request/response coordination. Those responsibilities stay in the device session
 
 Reads may return partial data. Return `b""` on timeout, raise `EOFError` when the stream has permanently ended, and
 raise `OSError` on communication failure. Both `read` and `read_chunk` timeouts are in seconds. Writes must send all
-bytes or raise; cleanup should be safe to call more than once. See the [`Transport` protocol](../../core/transport.py).
+bytes or raise; cleanup should be safe to call more than once. See the [`Transport` protocol](transport.py).
+
+The device subsystem lives entirely in this plugin: transport/protocol contracts, their factory registry,
+connections, implementations and commands. Core owns command dispatch, plugin discovery and generic resource
+cleanup; it has no device-specific registration API.
 
 ## Adding device support
 
@@ -29,8 +33,10 @@ Choose the extension point that matches what is new:
 
 - **A new communication scheme or interface** (for example, a vendor SDK that exposes a byte stream): implement a
   transport and register its URL scheme, as shown below. Existing `device.*` commands can then use it.
-- **A particular device's protocol or operations**: if it fits the byte-stream model, use manifests for its packet
-  layout and add plugin commands for device-specific workflows or convenience. If the device is controlled through
+- **A message protocol**: register a protocol session factory (below) for framing and response coordination.
+  Select it per operation with `--protocol`; no explicit attach step is needed.
+- **A particular device's operations**: use manifests for payload layouts and plugin commands for device-specific
+  workflows. If the device is controlled through
   a structured SDK rather than a byte stream, add a plugin with commands that use that SDK directly instead of
   forcing it into a transport.
 
@@ -39,14 +45,15 @@ a workspace plugin scaffold with `rigbox run plugin.new <name>`.
 
 ## Implementing a transport
 
-Implement the [`Transport` protocol](../../core/transport.py), then register a factory with
-`Registry.add_transport`. The factory receives the full URL and `TransportOptions`; `params` contains values passed
+Implement the [`Transport` protocol](transport.py), then register a factory with
+`DeviceRegistry.add_transport`. The factory receives the full URL and `TransportOptions`; `params` contains values passed
 with `device.connect --param key=value`.
 
 ```python
 from rigbox.core.registry import Registry
-from rigbox.core.transport import Transport, TransportOptions
 from rigbox.hooks import hookimpl
+from rigbox.plugins.device.registry import DeviceRegistry
+from rigbox.plugins.device.transport import Transport, TransportOptions
 
 
 def open_mydevice(url: str, options: TransportOptions) -> Transport:
@@ -57,13 +64,99 @@ def open_mydevice(url: str, options: TransportOptions) -> Transport:
 @hookimpl
 def rigbox_register(registry: Registry) -> None:
     """Register the mydevice URL scheme."""
-    registry.add_transport("mydevice", open_mydevice)
+    registry.extension(DeviceRegistry).add_transport("mydevice", open_mydevice)
 ```
 
 Users can then connect with a URL such as `mydevice://serial-number`. `Connection` owns packet assembly, locking,
 user-facing I/O errors, and cleanup; it can also be used as a Python context manager. Keep framing and codecs out of
 transports. HID reports or BLE notifications need an explicit stream adaptation that preserves protocol identifiers
-and boundaries. Rigbox does not add background reader threads or queues.
+and boundaries. Rigbox does not add background reader threads.
+
+`registry.extension(DeviceRegistry)` gets or creates one shared device registry for that command registry.
+This lets a plugin register before or after the device plugin's hook; registrations are not global and are not
+replaced when built-ins load. The extension constructor does not open devices or install built-in factories.
+Python plugins must import contracts from `rigbox.plugins.device.transport` / `rigbox.plugins.device.protocol`
+and register through this extension, replacing the former `rigbox.core.*` imports and direct
+`registry.add_transport` / `registry.add_protocol` calls. Device commands and their arguments are unchanged.
+
+## Message protocols
+
+Connect over a transport, then choose the protocol **per operation**:
+
+```text
+rigbox> device.connect console loop://
+rigbox> device.send console --protocol line --text "version"
+rigbox> device.expect console --protocol line
+rigbox> device.request console --protocol line --text "status"
+rigbox> device.capture console --protocol line --seconds 2 --out lines.ndjson
+rigbox> device.close console
+```
+
+Omitting `--protocol` (or selecting `raw`) keeps the existing fixed-size/raw-chunk behavior. `--text` sends UTF-8
+payload bytes; `--hex` and `--manifest`/`--values` remain available. Send results describe **wire bytes**, including
+framing. Expect/request results describe the **payload**, without framing, as size/hex or decoded manifest fields.
+With a non-raw protocol, omit `--size`/`--response-size`; the protocol determines the boundary. A receive manifest
+decodes and validates the framed payload rather than controlling how many bytes to read.
+
+The built-in `line` protocol adds LF on send and removes it from received payloads. Supply one payload without LF;
+embedded LF is rejected. CR is preserved, so CRLF peers produce payloads ending in CR. Empty lines are messages,
+not timeouts. The session retains partial messages after timeouts and additional lines from coalesced reads.
+The maximum outgoing wire message and total retained input buffer are each 64 KiB. Input overflow fails the
+session explicitly and requires closing/reconnecting; truncated EOF is also an error, not a completed message.
+There is no idle-gap detection, prompt matching or response correlation: a line request returns the next line,
+including previously queued input.
+
+The connection owns the transport and exclusive access lock. A protocol session is created internally when first
+selected and reused for subsequent operations using that protocol. Switching to another protocol, including raw,
+is allowed only when the current session has no pending input or framing failure. Otherwise drain using the same
+protocol or close/reconnect; input is never silently discarded. Closing is always allowed.
+This checks **already buffered** input, not bytes still on the device or in the transport's receive buffer.
+Per-operation selection does not enable multiplexing: mixing protocols still requires firmware support and
+explicit routing or mode switching. Rigbox does not auto-detect device/command support.
+
+Protocol captures keep exact wire bytes in `hex`, plus `protocol` and `payload_hex`; optional `decoded` fields
+describe the payload. Thus the same file can be replayed and parsed with the original protocol. Clean EOF ends
+capture; framing/transport errors fail the command, leaving the records already written. Incomplete input at a
+capture timeout remains in the session for a subsequent operation.
+
+### Implementing a protocol
+
+Implement [`ProtocolSession`](protocol.py) and register its factory:
+
+```python
+from rigbox.core.registry import CommandError, Registry
+from rigbox.hooks import hookimpl
+from rigbox.plugins.device.protocol import ProtocolSession
+from rigbox.plugins.device.registry import DeviceRegistry
+
+
+def open_myprotocol(scheme: str) -> ProtocolSession:
+    """Open my device's message protocol."""
+    if scheme not in {"serial", "loop", "replay"}:
+        raise CommandError(f"myprotocol does not support {scheme}")
+    return MyProtocolSession()
+
+
+@hookimpl
+def rigbox_register(registry: Registry) -> None:
+    """Register a per-operation message protocol."""
+    registry.extension(DeviceRegistry).add_protocol("myprotocol", open_myprotocol)
+```
+
+The factory receives the connection's transport scheme and can reject unsupported combinations. Identifiers
+are case-insensitive; `raw` is reserved. Sessions implement `encode`, `receive`, `request`, and `pending_input`.
+They receive a restricted `MessageChannel` interface under the connection lock and must not open/close the
+transport or start competing readers. `receive`/`request` return a `Message(payload, wire_data, metadata)` or `None` on
+timeout (not `b""`, since empty payloads are valid). Keep exact wire bytes for replay, bound retained input,
+use one overall read deadline, retain unrelated messages, and never retry a write automatically.
+`metadata` is optional and contains named integer/string protocol fields; results envelope payloads only when
+metadata is present. `encode` and `request` accept keyword-only `options: Mapping[str, str] | None = None`;
+validate these before I/O and reject unsupported fields. Existing implementations without this parameter
+still work when no options are supplied, but must adopt it to accept per-message options.
+`request` owns protocol-specific matching and completion; its response timeout starts after writing.
+Use `CommandError` for framing/user errors, propagate `OSError` for I/O failure, and use `EOFError` only for
+clean stream termination. Configurable delimiters, HID adaptation, command-spec loading and COBS/SLIP remain
+future work.
 
 ## Examples
 
@@ -79,11 +172,11 @@ rigbox> device.capture dut --manifest examples\sensor_report.yaml --seconds 10 -
 rigbox> device.close dut
 ```
 
-`device.capture` writes timestamped NDJSON to the workspace's `captures/` folder. Reads assemble partial data into
+In raw mode, `device.capture` writes timestamped NDJSON to the workspace's `captures/` folder. Reads assemble partial data into
 manifest-sized (or `--size`) packets using one overall deadline. Incomplete packets are consumed rather than buffered
-for the next command; variable-length framing (COBS, SLIP, length prefixes) is not implemented.
+for the next command.
 
-`device.request` accepts the same request input as `device.send`. Select its response with exactly one of
+Raw `device.request` accepts the same request input as `device.send`. Select its response with exactly one of
 `--response-size` or `--response-manifest`. The write and reply read are serialized, but buffered input is retained,
 so replies are not correlated. Failed writes are never retried automatically.
 

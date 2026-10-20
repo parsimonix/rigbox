@@ -10,8 +10,14 @@ from pydantic import BaseModel, Field
 from rigbox.core.cli_parser import path_field
 from rigbox.core.context import Context
 from rigbox.core.registry import CommandError, NoArgs, Registry
-from rigbox.core.render import RigboxResponse
-from rigbox.core.workflow import Step, Workflow, load_workflow, run_workflow, save_workflow
+from rigbox.core.render import RigboxCmdResult
+from rigbox.core.workflow import (
+    Step,
+    Workflow,
+    load_workflow,
+    run_workflow,
+    save_workflow,
+)
 from rigbox.hooks import hookimpl
 from rigbox.plugins.plugin_template import PLUGIN_NAME, render_plugin
 
@@ -19,7 +25,9 @@ from rigbox.plugins.plugin_template import PLUGIN_NAME, render_plugin
 class CommandsArgs(BaseModel):
     """Arguments for `commands`."""
 
-    prefix: str = Field("", description="Only list commands starting with this, e.g. 'dsp.'")
+    prefix: str = Field(
+        "", description="Only list commands starting with this, e.g. 'dsp.'"
+    )
 
 
 class WorkflowSaveArgs(BaseModel):
@@ -33,8 +41,12 @@ class WorkflowSaveArgs(BaseModel):
 class WorkflowRunArgs(BaseModel):
     """Arguments for `workflow.run`."""
 
-    workflow: str = path_field(description="Path to a workflow file, or a name in the workspace workflows dir")
-    var: list[str] = Field(default_factory=list, description="Override a variable: --var key=value")
+    workflow: str = path_field(
+        description="Path to a workflow file, or a name in the workspace workflows dir"
+    )
+    var: list[str] = Field(
+        default_factory=list, description="Override a variable: --var key=value"
+    )
 
 
 class EchoArgs(BaseModel):
@@ -48,8 +60,12 @@ class EchoArgs(BaseModel):
 class PluginNewArgs(BaseModel):
     """Arguments for `plugin.new`."""
 
-    name: str = Field(description="Plugin name: lowercase letters, digits and underscores, starting with a letter")
-    force: bool = Field(False, description="Overwrite the plugin file if it already exists")
+    name: str = Field(
+        description="Plugin name: lowercase letters, digits and underscores, starting with a letter"
+    )
+    force: bool = Field(
+        False, description="Overwrite the plugin file if it already exists"
+    )
 
 
 def _find_workflow(ctx: Context, ref: str) -> Path:
@@ -70,12 +86,24 @@ def rigbox_register(registry: Registry) -> None:
     @registry.command("commands", args=CommandsArgs, record=False)
     def commands(ctx: Context, args: CommandsArgs) -> list[dict[str, Any]]:
         """List the commands (use `<command> --help` for one command's arguments)."""
-        return [{"command": name, "summary": ctx.registry.get(name).help} for name in ctx.registry.names() if name.startswith(args.prefix)]
+        return [
+            {"command": name, "summary": ctx.registry.get(name).help}
+            for name in ctx.registry.names()
+            if name.startswith(args.prefix)
+        ]
 
     @registry.command("plugins.list", record=False)
     def plugins_list(ctx: Context, args: NoArgs) -> list[dict[str, Any]]:
         """List loaded plugins and their commands."""
-        return [{"plugin": p.name, "source": p.source, "commands": len(p.commands), "error": p.error} for p in ctx.registry.plugins]
+        return [
+            {
+                "plugin": p.name,
+                "source": p.source,
+                "commands": len(p.commands),
+                "error": p.error,
+            }
+            for p in ctx.registry.plugins
+        ]
 
     @registry.command("plugin.new", args=PluginNewArgs, record=False)
     def plugin_new(ctx: Context, args: PluginNewArgs) -> dict[str, str]:
@@ -83,7 +111,9 @@ def rigbox_register(registry: Registry) -> None:
         if ctx.workspace is None:
             raise CommandError("plugin.new needs a workspace (run `rigbox init`)")
         if not PLUGIN_NAME.fullmatch(args.name):
-            raise CommandError(f"invalid plugin name '{args.name}': use lowercase letters, digits and underscores")
+            raise CommandError(
+                f"invalid plugin name '{args.name}': use lowercase letters, digits and underscores"
+            )
         path = ctx.workspace.plugins_dir / f"{args.name}.py"
         if path.exists() and not args.force:
             raise CommandError(f"{path.name} already exists (use --force to overwrite)")
@@ -105,15 +135,19 @@ def rigbox_register(registry: Registry) -> None:
         """Save the last N history steps as a shareable workflow file."""
         if ctx.workspace is None:
             raise CommandError("workflow.save needs a workspace (run `rigbox init`)")
-        steps = [Step(run=e["run"], args=e["args"]) for e in ctx.history.entries() if e["ok"]][-args.last :]
+        steps = [
+            Step(run=e["run"], args=e["args"]) for e in ctx.history.entries() if e["ok"]
+        ][-args.last :]
         if not steps:
             raise CommandError("no history to save")
         path = ctx.workspace.workflows_dir / f"{args.name}.yaml"
-        save_workflow(path, Workflow(name=args.name, description=args.description, steps=steps))
+        save_workflow(
+            path, Workflow(name=args.name, description=args.description, steps=steps)
+        )
         return {"saved": str(path), "steps": len(steps)}
 
     @registry.command("workflow.run", args=WorkflowRunArgs, record=False)
-    def workflow_run(ctx: Context, args: WorkflowRunArgs) -> RigboxResponse:
+    def workflow_run(ctx: Context, args: WorkflowRunArgs) -> RigboxCmdResult:
         """Run a declarative workflow file."""
         overrides: dict[str, Any] = {}
         for item in args.var:
@@ -121,7 +155,9 @@ def rigbox_register(registry: Registry) -> None:
             if not eq:
                 raise CommandError(f"--var expects key=value, got: {item}")
             overrides[key] = value
-        return run_workflow(ctx, load_workflow(_find_workflow(ctx, args.workflow)), overrides)
+        return run_workflow(
+            ctx, load_workflow(_find_workflow(ctx, args.workflow)), overrides
+        )
 
     @registry.command("demo.echo", args=EchoArgs)
     def demo_echo(ctx: Context, args: EchoArgs) -> list[dict[str, Any]]:

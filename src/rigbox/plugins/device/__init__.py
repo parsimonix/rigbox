@@ -1,1 +1,1 @@
-"""Device plugin: serial connections, send, expect and capture, decoded via manifests."""
+"""Manage transport connections and per-operation messaging, with optional manifest payload codecs."""

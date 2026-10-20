@@ -1,7 +1,7 @@
 """Transports: how rigbox talks to a device.
 
 A transport is a plain byte stream. The registry maps a URL scheme (``loop``, ``replay``, ...) to a factory that opens
-one, so a plugin can add support for a new kind of device by registering a scheme (see `Registry.add_transport`).
+one, so a plugin can add device support by registering a scheme (see `DeviceRegistry.add_transport`).
 Framing, decoding and request/response coordination belong above this interface. Report-based transports must
 explicitly adapt report identifiers and boundaries rather than silently discarding them.
 """

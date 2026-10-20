@@ -7,7 +7,7 @@ from collections import deque
 from pathlib import Path
 
 from rigbox.core.registry import CommandError
-from rigbox.core.transport import Transport, TransportOptions
+from rigbox.plugins.device.transport import Transport, TransportOptions
 
 
 class ReplayTransport:

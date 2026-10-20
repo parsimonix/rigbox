@@ -5,16 +5,17 @@ from __future__ import annotations
 import difflib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 from pydantic import BaseModel
 from rich.console import RenderableType
 
 from rigbox.core.render import RigboxCmdResult
-from rigbox.core.transport import Transport, TransportFactory, TransportOptions, scheme_of
 
 if TYPE_CHECKING:
     from rigbox.core.context import Context
+
+ExtensionT = TypeVar("ExtensionT")
 
 
 class CommandError(Exception):
@@ -70,13 +71,29 @@ class PluginInfo:
 
 
 class Registry:
-    """The set of known commands and transports, plus the plugins that provided them."""
+    """The known commands and plugin-owned extensions, plus their providing plugins."""
 
     def __init__(self) -> None:
         """Create an empty registry."""
         self._commands: dict[str, Command] = {}
         self.plugins: list[PluginInfo] = []
-        self.transports: dict[str, TransportFactory] = {}
+        self._extensions: dict[type[object], object] = {}
+
+    def extension(self, extension_type: type[ExtensionT]) -> ExtensionT:
+        """Get or create one plugin-owned extension per registry, independent of plugin load order.
+
+        Args:
+            extension_type: Extension class with a no-argument constructor.
+
+        Returns:
+            The shared instance for this registry and extension class.
+        """
+        extension = self._extensions.get(extension_type)
+        if isinstance(extension, extension_type):
+            return extension
+        extension = extension_type()
+        self._extensions[extension_type] = extension
+        return extension
 
     def command(
         self,
@@ -152,40 +169,3 @@ class Registry:
             list[str]: The sorted list of all command names.
         """
         return sorted(self._commands)
-
-    def add_transport(self, scheme: str, factory: TransportFactory) -> None:
-        """Register `factory` as the way to open URLs of the form ``<scheme>://...``.
-
-        Args:
-            scheme (str): The URL scheme to register the transport for.
-            factory (TransportFactory): The factory function to create the transport.
-
-        Raises:
-            ValueError: If the scheme is already registered.
-        """
-        scheme = scheme.lower()
-        if scheme in self.transports:
-            raise ValueError(f"duplicate transport scheme: {scheme}")
-        self.transports[scheme] = factory
-
-    def open_transport(self, url: str, options: TransportOptions) -> Transport:
-        """Open `url` with the transport registered for its scheme.
-
-        Args:
-            url (str): The URL to open.
-            options (TransportOptions): The options to pass to the transport factory.
-
-        Raises:
-            CommandError: If no transport handles the scheme, or opening fails.
-        """
-        scheme = scheme_of(url)
-        factory = self.transports.get(scheme)
-        if factory is None:
-            known = ", ".join(sorted(self.transports)) or "none"
-            raise CommandError(f"no transport for '{scheme}' URLs (known schemes: {known})")
-        try:
-            return factory(url, options)
-        except CommandError:
-            raise
-        except Exception as e:  # factories are plugin code; never let one crash the host
-            raise CommandError(f"cannot open {url}: {e}") from None
