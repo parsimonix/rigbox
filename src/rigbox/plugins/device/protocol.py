@@ -1,7 +1,9 @@
-"""Define device messaging sessions independently of the byte-stream transport.
+"""ProtocolSession: Message framing and request coordination for a connection over a transport.
 
-Factories create one session at a time for a connection. Sessions retain incomplete input and implement
-message boundaries and request completion; they neither open nor close the underlying channel.
+ProtocolSessions exist independently of the transport itself, and multiple protocol sessions can share the same transport.
+
+Factories create one session at a time for a connection. Sessions retain incomplete input and implement message boundaries and request completion;
+they neither open nor close the underlying channel.
 """
 
 from __future__ import annotations
@@ -12,24 +14,24 @@ from typing import Protocol, runtime_checkable
 
 
 class MessageChannel(Protocol):
-    """Expose I/O to a protocol while the connection holds its exclusive access lock."""
+    """Interface to expose I/O from a Transport to a ProtocolSession while the Connection holds its exclusive access lock."""
 
     def write(self, data: bytes) -> None:
         """Write all bytes or raise an I/O error.
 
         Args:
-            data: Bytes to transmit without automatic retries.
+            data (bytes): Bytes to transmit without automatic retries.
 
         Raises:
             OSError: If the write fails, including a short write.
         """
         ...
 
-    def read_chunk(self, timeout: float) -> bytes:
+    def read_chunk(self, timeout_s: float) -> bytes:
         """Read available bytes, returning empty bytes on timeout.
 
         Args:
-            timeout: Maximum wait in seconds; zero polls.
+            timeout_s (float): Maximum wait in seconds; zero polls.
 
         Returns:
             Received bytes, whose boundaries need not match message boundaries.
@@ -43,7 +45,7 @@ class MessageChannel(Protocol):
 
 @dataclass(frozen=True)
 class Message:
-    """Keep a complete message's payload and exact received wire bytes together."""
+    """A complete received protocol message."""
 
     payload: bytes
     wire_data: bytes
@@ -51,14 +53,14 @@ class Message:
 
 
 class ProtocolSession(Protocol):
-    """Frame messages and coordinate requests for one connection without owning its transport."""
+    """Formal definition of a messaging format. This frames messages and coordinates requests for one connection without owning its underlying transport."""
 
     @property
     def pending_input(self) -> bool:
-        """Report whether switching away would abandon received data or a framing failure.
+        """Report whether switching away from this ProtocolSession would abandon received data or a framing failure.
 
         Returns:
-            True when this session must be drained or the connection closed before switching.
+            bool: True when this session must be drained or the connection closed before switching.
         """
         ...
 
@@ -66,11 +68,11 @@ class ProtocolSession(Protocol):
         """Frame one outgoing payload.
 
         Args:
-            payload: Encoded application data.
-            options: Per-message protocol fields, validated before writing.
+            payload (bytes): Encoded application data.
+            options (Mapping[str, str] | None): Per-message protocol fields, validated before writing.
 
         Returns:
-            Bytes to write to the channel.
+            bytes: Bytes to write to the channel.
 
         Raises:
             CommandError: If the payload cannot be framed.
@@ -81,8 +83,8 @@ class ProtocolSession(Protocol):
         """Receive one message within one overall deadline, retaining unfinished or extra input.
 
         Args:
-            channel: Exclusively held connection I/O.
-            timeout_s: Maximum wait in seconds; zero polls.
+            channel (MessageChannel): Exclusively held connection I/O.
+            timeout_s (float): Maximum wait in seconds; zero polls.
 
         Returns:
             A complete message, including an empty payload, or None on timeout.
@@ -105,13 +107,13 @@ class ProtocolSession(Protocol):
         """Send once and wait for the protocol's response without discarding unrelated input.
 
         Args:
-            channel: Exclusively held connection I/O.
-            payload: Encoded application request.
-            timeout_s: Response deadline in seconds, starting after the write.
-            options: Per-message protocol fields, validated before writing.
+            channel (MessageChannel): Exclusively held connection I/O.
+            payload (bytes): Encoded application request.
+            timeout_s (float): Response deadline in seconds, starting after the write.
+            options (Mapping[str, str] | None): Per-message protocol fields, validated before writing.
 
         Returns:
-            The response message, or None on timeout.
+            Message | None: The response message, or None on timeout.
 
         Raises:
             CommandError: If framing or response validation fails.
@@ -133,6 +135,6 @@ class ProtocolDiagnostics(Protocol):
         """Return and clear pending diagnostics.
 
         Returns:
-            Diagnostic messages in occurrence order.
+            list[str]: Diagnostic messages in occurrence order.
         """
         ...

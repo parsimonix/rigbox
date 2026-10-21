@@ -27,9 +27,7 @@ class ReplayTransport:
             for line in path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     record = json.loads(line)
-                    if record.get("dir", "rx") == "rx" and isinstance(
-                        record.get("hex"), str
-                    ):
+                    if record.get("dir", "rx") == "rx" and isinstance(record.get("hex"), str):
                         chunks.append(bytes.fromhex(record["hex"]))
         except (OSError, ValueError, AttributeError) as e:
             raise CommandError(f"cannot read capture {path}: {e}") from None

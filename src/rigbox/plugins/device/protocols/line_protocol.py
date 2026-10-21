@@ -86,9 +86,7 @@ class LineProtocol:
                 chunk = channel.read_chunk(remaining)
             except EOFError:
                 if self._buffer:
-                    raise CommandError(
-                        f"stream ended with an incomplete line ({len(self._buffer)} bytes buffered)"
-                    ) from None
+                    raise CommandError(f"stream ended with an incomplete line ({len(self._buffer)} bytes buffered)") from None
                 raise
             polled = True
             if not chunk:
@@ -101,9 +99,7 @@ class LineProtocol:
                 self._failed = True
                 raise CommandError(f"line input exceeds {self.MAX_BUFFER_SIZE} bytes including LF; close and reconnect")
 
-    def request(
-        self, channel: MessageChannel, payload: bytes, timeout_s: float, *, options: Mapping[str, str] | None = None
-    ) -> Message | None:
+    def request(self, channel: MessageChannel, payload: bytes, timeout_s: float, *, options: Mapping[str, str] | None = None) -> Message | None:
         """Write one line and return the next line, without response correlation or input clearing.
 
         Args:

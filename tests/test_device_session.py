@@ -12,10 +12,10 @@ import pytest
 from rigbox.core.context import Context
 from rigbox.core.registry import CommandError, Registry
 from rigbox.plugins.device import connection as connection_module
-from rigbox.plugins.device import serial_transport as serial_module
 from rigbox.plugins.device.connection import Connection
-from rigbox.plugins.device.serial_transport import SerialTransport
 from rigbox.plugins.device.transport import TransportOptions
+from rigbox.plugins.device.transports import serial_transport as serial_module
+from rigbox.plugins.device.transports.serial_transport import SerialTransport
 
 
 class StubTransport:
@@ -231,7 +231,9 @@ def test_loopback_request_and_context_managed_cleanup() -> None:
     assert not transport._port.is_open
 
 
-def test_serial_handles_partial_writes_without_flushing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serial_handles_partial_writes_without_flushing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     written = bytearray()
     settings: dict[str, object] = {}
 
@@ -263,7 +265,9 @@ def test_rfc2217_rejects_an_explicit_unsupported_write_timeout() -> None:
         SerialTransport("rfc2217://unused:1234", TransportOptions(write_timeout=0.5))
 
 
-def test_context_cleanup_attempts_every_resource_and_reports_failures(capsys: pytest.CaptureFixture[str]) -> None:
+def test_context_cleanup_attempts_every_resource_and_reports_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     bad = StubTransport()
     bad.close_error = OSError("cleanup failed")
     good = StubTransport()
@@ -295,7 +299,9 @@ def test_serial_rejects_writes_that_make_no_progress(progress: int | None, monke
         session.write(b"abc")
 
 
-def test_serial_partial_writes_share_one_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serial_partial_writes_share_one_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     elapsed = 0.0
     waits: list[float] = []
 
@@ -323,7 +329,9 @@ def test_serial_partial_writes_share_one_deadline(monkeypatch: pytest.MonkeyPatc
     assert waits == pytest.approx([0.5, 0.2])
 
 
-def test_serial_raw_chunks_are_bounded_and_only_wait_for_the_first_byte(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serial_raw_chunks_are_bounded_and_only_wait_for_the_first_byte(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reads: list[tuple[int, float]] = []
 
     class BufferedPort:

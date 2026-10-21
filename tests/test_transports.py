@@ -116,8 +116,7 @@ def test_replay_decodes_recorded_packets_in_order_then_reports_the_end(ctx: Cont
 def test_replay_keeps_capture_boundaries_and_splits_reads(ctx: Context, tmp_path: Path) -> None:
     cap = tmp_path / "raw.ndjson"
     cap.write_text(
-        "\n".join(json.dumps(r) for r in [{"dir": "rx", "hex": "0102"}, {"dir": "tx", "hex": "ff"}, {"hex": "030405"}])
-        + "\n",
+        "\n".join(json.dumps(r) for r in [{"dir": "rx", "hex": "0102"}, {"dir": "tx", "hex": "ff"}, {"hex": "030405"}]) + "\n",
         encoding="utf-8",
     )
     ctx.run("device.connect", {"name": "r", "url": f"replay://{cap}"})

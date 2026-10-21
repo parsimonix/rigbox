@@ -110,8 +110,6 @@ line-ending = "lf"
 [tool.ruff.lint]
 # E/F: pycodestyle and pyflakes; I: import order; UP: modern syntax; B: likely bugs;
 # D: docstrings (Google style); ANN: type annotations
-target-version = "py311"
-line-length = 160
 select = ["E", "F", "I", "UP", "B", "D", "ANN"]
 ignore = [
     "B008", # Do not perform function call `typer.Argument` in argument defaults

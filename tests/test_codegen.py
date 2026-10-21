@@ -151,9 +151,7 @@ def test_generate_reports_manifest_read_errors(tmp_path: Path, manifest_text: st
     rigbox_register(registry)
 
     with pytest.raises(CommandError, match="cannot read manifest"):
-        Context(registry=registry).run(
-            "code.generate", {"template": str(template_path), "manifest": str(source), "out": str(output)}
-        )
+        Context(registry=registry).run("code.generate", {"template": str(template_path), "manifest": str(source), "out": str(output)})
 
     assert not output.parent.exists()
 

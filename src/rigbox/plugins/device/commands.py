@@ -21,12 +21,12 @@ from rigbox.core.cli_parser import path_field
 from rigbox.core.registry import CommandError, NoArgs, Registry
 from rigbox.hooks import hookimpl
 from rigbox.plugins.device.connection import Connection
-from rigbox.plugins.device.line_protocol import open_line
 from rigbox.plugins.device.protocol import Message
+from rigbox.plugins.device.protocols.line_protocol import open_line
 from rigbox.plugins.device.registry import DeviceRegistry
-from rigbox.plugins.device.replay_transport import open_replay
-from rigbox.plugins.device.serial_transport import open_serial
 from rigbox.plugins.device.transport import TransportOptions
+from rigbox.plugins.device.transports.replay_transport import open_replay
+from rigbox.plugins.device.transports.serial_transport import open_serial
 from rigbox.plugins.manifests.api import Codec, parse_values, resolve_manifest
 
 if TYPE_CHECKING:
@@ -37,15 +37,9 @@ class ConnectArgs(BaseModel):
     """Arguments for `device.connect`."""
 
     name: str = Field(description="Name to refer to this connection by")
-    url: str = Field(
-        description="A serial port (COM3), or a URL whose scheme picks the transport (device.transports)"
-    )
-    baud: int = Field(
-        115200, ge=1, description="Serial baud rate (ignored by transports without one)"
-    )
-    timeout: float = Field(
-        1.0, gt=0, allow_inf_nan=False, description="Default read timeout in seconds"
-    )
+    url: str = Field(description="A serial port (COM3), or a URL whose scheme picks the transport (device.transports)")
+    baud: int = Field(115200, ge=1, description="Serial baud rate (ignored by transports without one)")
+    timeout: float = Field(1.0, gt=0, allow_inf_nan=False, description="Default read timeout in seconds")
     write_timeout: float | None = Field(
         None,
         gt=0,
@@ -96,12 +90,8 @@ class SendArgs(ProtocolArgs):
     """Arguments for `device.send`."""
 
     hex: str | None = Field(None, description="Raw bytes as hex")
-    text: str | None = Field(
-        None, description="UTF-8 payload text; the selected protocol adds any framing"
-    )
-    manifest: str | None = path_field(
-        None, description="Pack a packet with this manifest (needs --values)"
-    )
+    text: str | None = Field(None, description="UTF-8 payload text; the selected protocol adds any framing")
+    manifest: str | None = path_field(None, description="Pack a packet with this manifest (needs --values)")
     values: str | None = Field(None, description="Field values, YAML/JSON flow mapping")
     protocol_option: list[str] = Field(
         default_factory=list,
@@ -116,9 +106,7 @@ class ExpectArgs(ProtocolArgs):
         None,
         description="Decode payload with this manifest; also sets packet size in raw mode",
     )
-    size: int | None = Field(
-        None, ge=1, description="Read exactly this many raw bytes (raw protocol only)"
-    )
+    size: int | None = Field(None, ge=1, description="Read exactly this many raw bytes (raw protocol only)")
     timeout: float | None = Field(
         None,
         gt=0,
@@ -134,9 +122,7 @@ class ExpectArgs(ProtocolArgs):
 class RequestArgs(SendArgs):
     """Arguments for `device.request`."""
 
-    response_manifest: str | None = path_field(
-        None, description="Decode response payload; also sets response size in raw mode"
-    )
+    response_manifest: str | None = path_field(None, description="Decode response payload; also sets response size in raw mode")
     response_size: int | None = Field(
         None,
         ge=1,
@@ -161,28 +147,20 @@ class RequestArgs(SendArgs):
 class CaptureArgs(ProtocolArgs):
     """Arguments for `device.capture`."""
 
-    seconds: float = Field(
-        10.0, gt=0, allow_inf_nan=False, description="Stop after this long"
-    )
+    seconds: float = Field(10.0, gt=0, allow_inf_nan=False, description="Stop after this long")
     count: int | None = Field(None, ge=1, description="Stop after this many packets")
-    manifest: str | None = path_field(
-        None, description="Decode payloads; also sets packet size in raw mode"
-    )
+    manifest: str | None = path_field(None, description="Decode payloads; also sets packet size in raw mode")
     size: int | None = Field(
         None,
         ge=1,
         description="Split the stream into fixed-size raw packets (raw protocol only)",
     )
-    out: str | None = path_field(
-        None, description="Output NDJSON file (default: workspace captures dir)"
-    )
+    out: str | None = path_field(None, description="Output NDJSON file (default: workspace captures dir)")
 
 
 def _get(ctx: Context, name: str) -> Connection:
     conn = ctx.connections.get(name)
-    if not isinstance(
-        conn, Connection
-    ):  # also rejects another plugin's resource that happens to share the name
+    if not isinstance(conn, Connection):  # also rejects another plugin's resource that happens to share the name
         raise CommandError(f"no connection named '{name}' (use device.connect)")
     return conn
 
@@ -205,43 +183,22 @@ def _capture_path(ctx: Context, name: str, out: str | None) -> Path:
 
 
 def _encode(ctx: Context, args: SendArgs) -> bytes:
-    if (
-        args.hex is not None
-        and args.manifest is None
-        and args.text is None
-        and args.values is None
-    ):
+    if args.hex is not None and args.manifest is None and args.text is None and args.values is None:
         try:
             return bytes.fromhex(args.hex.replace(" ", ""))
         except ValueError as error:
             raise CommandError(f"bad hex: {error}") from None
-    if (
-        args.text is not None
-        and args.hex is None
-        and args.manifest is None
-        and args.values is None
-    ):
+    if args.text is not None and args.hex is None and args.manifest is None and args.values is None:
         try:
             return args.text.encode("utf-8")
         except UnicodeEncodeError as error:
             raise CommandError(f"cannot encode text as UTF-8: {error}") from None
-    if (
-        args.manifest is not None
-        and args.values is not None
-        and args.hex is None
-        and args.text is None
-    ):
-        return Codec(resolve_manifest(ctx, args.manifest)).encode(
-            parse_values(args.values)
-        )
-    raise CommandError(
-        "give either --hex, --text, or --manifest together with --values"
-    )
+    if args.manifest is not None and args.values is not None and args.hex is None and args.text is None:
+        return Codec(resolve_manifest(ctx, args.manifest)).encode(parse_values(args.values))
+    raise CommandError("give either --hex, --text, or --manifest together with --values")
 
 
-def _packet(
-    ctx: Context, manifest: str | None, size: int | None
-) -> tuple[Codec | None, int]:
+def _packet(ctx: Context, manifest: str | None, size: int | None) -> tuple[Codec | None, int]:
     if manifest is not None and size is None:
         codec = Codec(resolve_manifest(ctx, manifest))
         return codec, codec.size
@@ -250,27 +207,17 @@ def _packet(
     raise CommandError("give exactly one packet manifest or fixed size")
 
 
-def _response_packet(
-    ctx: Context, protocol: str, manifest: str | None, size: int | None
-) -> tuple[Codec | None, int | None]:
+def _response_packet(ctx: Context, protocol: str, manifest: str | None, size: int | None) -> tuple[Codec | None, int | None]:
     if protocol == "raw":
         return _packet(ctx, manifest, size)
     if size is not None:
-        raise CommandError(
-            "fixed response size is only supported with --protocol raw; the protocol defines message boundaries"
-        )
-    return (
-        Codec(resolve_manifest(ctx, manifest)) if manifest is not None else None
-    ), None
+        raise CommandError("fixed response size is only supported with --protocol raw; the protocol defines message boundaries")
+    return (Codec(resolve_manifest(ctx, manifest)) if manifest is not None else None), None
 
 
-def _require_message(
-    message: Message | None, conn: Connection, protocol: str
-) -> Message:
+def _require_message(message: Message | None, conn: Connection, protocol: str) -> Message:
     if message is None:
-        raise CommandError(
-            f"timeout waiting for '{protocol}' message on '{conn.name}'; any partial input is retained"
-        )
+        raise CommandError(f"timeout waiting for '{protocol}' message on '{conn.name}'; any partial input is retained")
     return message
 
 
@@ -279,9 +226,7 @@ def _message_options(args: SendArgs) -> dict[str, str]:
     for item in args.protocol_option:
         key, equals, value = item.partition("=")
         if not equals or not key or key in options:
-            raise CommandError(
-                f"--protocol-option expects a unique key=value, got: {item}"
-            )
+            raise CommandError(f"--protocol-option expects a unique key=value, got: {item}")
         options[key] = value
     if options and args.protocol == "raw":
         raise CommandError("raw protocol does not accept per-message options")
@@ -299,22 +244,13 @@ def _message_result(
     elif payload_format == "hex":
         result = {"size": len(data), "hex": data.hex()}
     elif payload_format == "ascii":
-        text = "".join(
-            "\\\\"
-            if value == 0x5C
-            else chr(value)
-            if 0x20 <= value <= 0x7E
-            else f"\\x{value:02x}"
-            for value in data
-        )
+        text = "".join("\\\\" if value == 0x5C else chr(value) if 0x20 <= value <= 0x7E else f"\\x{value:02x}" for value in data)
         result = {"size": len(data), "text": text}
     else:
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as error:
-            raise CommandError(
-                f"cannot decode response payload as UTF-8: {error}"
-            ) from None
+            raise CommandError(f"cannot decode response payload as UTF-8: {error}") from None
         result = {"size": len(data), "text": text}
     if message is not None and message.metadata:
         # An envelope keeps protocol fields distinct from arbitrary manifest field names.
@@ -345,13 +281,9 @@ def rigbox_register(registry: Registry) -> None:
         return [{"protocol": "raw", "description": "Unframed bytes (the default)."}] + [
             {
                 "protocol": name,
-                "description": ((factory.__doc__ or "").strip().splitlines() or [""])[
-                    0
-                ],
+                "description": ((factory.__doc__ or "").strip().splitlines() or [""])[0],
             }
-            for name, factory in sorted(
-                ctx.registry.extension(DeviceRegistry).protocols.items()
-            )
+            for name, factory in sorted(ctx.registry.extension(DeviceRegistry).protocols.items())
         ]
 
     @registry.command("device.transports", record=False)
@@ -360,22 +292,15 @@ def rigbox_register(registry: Registry) -> None:
         return [
             {
                 "scheme": scheme,
-                "description": ((factory.__doc__ or "").strip().splitlines() or [""])[
-                    0
-                ],
+                "description": ((factory.__doc__ or "").strip().splitlines() or [""])[0],
             }
-            for scheme, factory in sorted(
-                ctx.registry.extension(DeviceRegistry).transports.items()
-            )
+            for scheme, factory in sorted(ctx.registry.extension(DeviceRegistry).transports.items())
         ]
 
     @registry.command("device.ports", record=False)
     def ports(ctx: Context, args: NoArgs) -> list[dict[str, str]]:
         """List serial ports on this machine."""
-        return [
-            {"device": p.device, "description": p.description, "hwid": p.hwid}
-            for p in list_ports.comports()
-        ]
+        return [{"device": p.device, "description": p.description, "hwid": p.hwid} for p in list_ports.comports()]
 
     @registry.command("device.connect", args=ConnectArgs)
     def connect(ctx: Context, args: ConnectArgs) -> dict[str, Any]:
@@ -383,16 +308,14 @@ def rigbox_register(registry: Registry) -> None:
         if args.name in ctx.connections:
             raise CommandError(f"connection '{args.name}' already exists")
         options = TransportOptions(
-            timeout=args.timeout,
+            timeout_s=args.timeout,
             baud=args.baud,
             params=_parse_params(args.param),
             write_timeout=args.write_timeout,
         )
         devices = ctx.registry.extension(DeviceRegistry)
         transport = devices.open_transport(args.url, options)
-        connection = Connection(
-            args.name, args.url, transport, options, registry=devices, log=ctx.log
-        )
+        connection = Connection(args.name, args.url, transport, options, registry=devices, log=ctx.log)
         ctx.connections[args.name] = connection
         return {"name": args.name, "url": args.url, "transport": connection.scheme}
 
@@ -406,7 +329,12 @@ def rigbox_register(registry: Registry) -> None:
     def list_(ctx: Context, args: NoArgs) -> list[dict[str, Any]]:
         """List open connections."""
         return [
-            {"name": c.name, "url": c.url, "transport": c.scheme, "timeout": c.timeout}
+            {
+                "name": c.name,
+                "url": c.url,
+                "transport": c.scheme,
+                "timeout": c.timeout_s,
+            }
             for c in ctx.connections.values()
             if isinstance(c, Connection)
         ]
@@ -456,19 +384,15 @@ def rigbox_register(registry: Registry) -> None:
         if args.manifest is not None and args.payload_format != "hex":
             raise CommandError("--payload-format cannot be combined with --manifest")
         codec, size = _response_packet(ctx, args.protocol, args.manifest, args.size)
-        timeout = args.timeout if args.timeout is not None else conn.timeout
+        timeout = args.timeout if args.timeout is not None else conn.timeout_s
         message: Message | None = None
         if size is not None:
             data = conn.read_exactly(size, timeout)
         else:
             try:
-                message = _require_message(
-                    conn.receive_message(args.protocol, timeout), conn, args.protocol
-                )
+                message = _require_message(conn.receive_message(args.protocol, timeout), conn, args.protocol)
             except EOFError:
-                raise CommandError(
-                    f"stream ended waiting for '{args.protocol}' message on '{conn.name}'"
-                ) from None
+                raise CommandError(f"stream ended waiting for '{args.protocol}' message on '{conn.name}'") from None
             data = message.payload
         return _message_result(data, codec, message, args.payload_format)
 
@@ -491,41 +415,29 @@ def rigbox_register(registry: Registry) -> None:
         """
         conn = _get(ctx, args.name)
         if args.response_manifest is not None and args.payload_format != "hex":
-            raise CommandError(
-                "--payload-format cannot be combined with --response-manifest"
-            )
-        codec, size = _response_packet(
-            ctx, args.protocol, args.response_manifest, args.response_size
-        )
+            raise CommandError("--payload-format cannot be combined with --response-manifest")
+        codec, size = _response_packet(ctx, args.protocol, args.response_manifest, args.response_size)
         payload = _encode(ctx, args)
         options = _message_options(args)
         if args.discard_packet:
             if "discard_packets" in options:
-                raise CommandError(
-                    "do not combine --discard-packet with --protocol-option discard_packets"
-                )
+                raise CommandError("do not combine --discard-packet with --protocol-option discard_packets")
             if any("," in rule for rule in args.discard_packet):
-                raise CommandError(
-                    "--discard-packet expects one TYPE[:COMMAND_ID] rule; repeat the option for more"
-                )
+                raise CommandError("--discard-packet expects one TYPE[:COMMAND_ID] rule; repeat the option for more")
             options["discard_packets"] = ",".join(args.discard_packet)
-        timeout = args.timeout if args.timeout is not None else conn.timeout
+        timeout = args.timeout if args.timeout is not None else conn.timeout_s
         message: Message | None = None
         if size is not None:
             data = conn.request(payload, size, timeout)
         else:
             try:
                 message = _require_message(
-                    conn.request_message(
-                        payload, args.protocol, timeout, options=options
-                    ),
+                    conn.request_message(payload, args.protocol, timeout, options=options),
                     conn,
                     args.protocol,
                 )
             except EOFError:
-                raise CommandError(
-                    f"stream ended waiting for '{args.protocol}' response on '{conn.name}'"
-                ) from None
+                raise CommandError(f"stream ended waiting for '{args.protocol}' response on '{conn.name}'") from None
             data = message.payload
         return _message_result(data, codec, message, args.payload_format)
 
@@ -547,9 +459,7 @@ def rigbox_register(registry: Registry) -> None:
         if args.manifest and args.size:
             raise CommandError("give at most one of --manifest or --size")
         if args.protocol != "raw" and args.size is not None:
-            raise CommandError(
-                "--size is only supported with --protocol raw; the protocol defines message boundaries"
-            )
+            raise CommandError("--size is only supported with --protocol raw; the protocol defines message boundaries")
         codec = Codec(resolve_manifest(ctx, args.manifest)) if args.manifest else None
         size = (codec.size if codec else args.size) if args.protocol == "raw" else None
         conn.check_protocol(args.protocol)
@@ -563,7 +473,7 @@ def rigbox_register(registry: Registry) -> None:
                 remaining = end - time.monotonic()
                 if remaining <= 0:
                     break
-                wait = min(conn.timeout, remaining)
+                wait = min(conn.timeout_s, remaining)
                 message: Message | None = None
                 try:
                     if args.protocol == "raw":
@@ -580,9 +490,7 @@ def rigbox_register(registry: Registry) -> None:
                 record: dict[str, Any] = {
                     "ts": datetime.now(UTC).isoformat(),
                     "dir": "rx",
-                    "hex": message.wire_data.hex()
-                    if message is not None
-                    else data.hex(),
+                    "hex": message.wire_data.hex() if message is not None else data.hex(),
                 }
                 if message is not None:
                     record.update(protocol=args.protocol, payload_hex=data.hex())

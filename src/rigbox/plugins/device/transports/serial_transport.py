@@ -27,22 +27,16 @@ class SerialTransport:
         Raises:
             CommandError: If the port cannot be opened.
         """
-        self._write_timeout: float | None = (
-            options.write_timeout
-            if options.write_timeout is not None
-            else options.timeout
-        )
+        self._write_timeout: float | None = options.write_timeout_s if options.write_timeout_s is not None else options.timeout_s
         if scheme_of(url) == "rfc2217":
-            if options.write_timeout is not None:
-                raise CommandError(
-                    "pyserial's RFC2217 transport does not support --write-timeout"
-                )
+            if options.write_timeout_s is not None:
+                raise CommandError("pyserial's RFC2217 transport does not support --write-timeout")
             self._write_timeout = None
         try:
             self._port = serial.serial_for_url(
                 url.removeprefix("serial://"),
                 baudrate=options.baud or self.DEFAULT_BAUD,
-                timeout=options.timeout,
+                timeout=options.timeout_s,
                 write_timeout=self._write_timeout,
             )
         except (serial.SerialException, ValueError, OSError) as e:
@@ -70,15 +64,11 @@ class SerialTransport:
         while offset < len(data):
             remaining = min(self._write_timeout, deadline - time.monotonic())
             if remaining <= 0:
-                raise serial.SerialTimeoutException(
-                    f"write timeout after {offset} of {len(data)} bytes"
-                )
+                raise serial.SerialTimeoutException(f"write timeout after {offset} of {len(data)} bytes")
             self._port.write_timeout = remaining
             written = self._port.write(data[offset:])
             if written is None or written <= 0:
-                raise serial.SerialTimeoutException(
-                    f"write made no progress after {offset} of {len(data)} bytes"
-                )
+                raise serial.SerialTimeoutException(f"write made no progress after {offset} of {len(data)} bytes")
             offset += written
 
     def read(self, size: int, timeout_s: float) -> bytes:
@@ -108,9 +98,7 @@ class SerialTransport:
         if not first:
             return b""
         self._port.timeout = 0
-        return first + self._port.read(
-            min(self._port.in_waiting, self.MAX_CHUNK_SIZE - 1)
-        )
+        return first + self._port.read(min(self._port.in_waiting, self.MAX_CHUNK_SIZE - 1))
 
     def close(self) -> None:
         """Close the port."""

@@ -1,4 +1,7 @@
-"""Own a transport, raw fixed-size operations and per-operation message protocol state."""
+"""Connection: An actively owned transport to a device.
+
+Connections manage an open transport, coordinate per-operation protocol state and provide raw I/O methods.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ from rigbox.plugins.device.transport import Transport, TransportOptions, scheme_
 
 
 class Connection:
-    """Own an open transport and coordinate raw and protocol I/O without a background reader."""
+    """An actively owned transport to a device."""
 
     def __init__(
         self,
@@ -30,15 +33,15 @@ class Connection:
         registry: DeviceRegistry | None = None,
         log: Callable[[str], None] | None = None,
     ) -> None:
-        """Wrap an already opened transport and optionally enable registered message protocols.
+        """Wrap an already opened transport and optionally enable registered message protocols over that transport.
 
         Args:
-            name: Connection identity.
-            url: URL that selected the transport.
-            transport: Already opened byte stream, owned and closed by this connection.
-            options: Default I/O settings.
-            registry: Protocol factories; omit only for raw-only Python connections.
-            log: Diagnostic sink; Python callers without one receive runtime warnings.
+            name (str): The connection name.
+            url (str): The connection URL that selected the transport.
+            transport (Transport): The transport to wrap, which will be owned and closed by this connection.
+            options (TransportOptions): The transport I/O options.
+            registry (DeviceRegistry | None, optional): Registry of protocol factories; omit only for raw-only Python connections. Defaults to None.
+            log (Callable[[str], None] | None, optional): Diagnostic log; Python callers without one receive runtime warnings. Defaults to None.
         """
         self.name: str = name
         self.url: str = url
@@ -52,7 +55,17 @@ class Connection:
         self._log = log
 
     def __enter__(self) -> Self:
-        """Return the open session for use in a context manager."""
+        """Return the open connection for use in a context manager.
+
+        Example:
+            ```python
+            with conn:
+                ...
+            ```
+
+        Returns:
+            Self: The open connection.
+        """
         self._ensure_open()
         return self
 
@@ -62,7 +75,15 @@ class Connection:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the session without hiding an exception from the managed block."""
+        """Handler for context manager exit.
+
+        Closes the session without hiding an exception from the managed block.
+
+        Args:
+            exc_type (type[BaseException] | None): The exception type if raised.
+            exc_value (BaseException | None): The exception instance if raised.
+            traceback (TracebackType | None): The traceback if an exception was raised.
+        """
         try:
             self.close()
         except CommandError as error:
@@ -72,24 +93,47 @@ class Connection:
 
     @property
     def scheme(self) -> str:
-        """The URL scheme that selected the transport."""
+        """Get the URL scheme that selected the transport.
+
+        Returns:
+            str: The URL scheme that selected the transport.
+        """
         return scheme_of(self.url)
 
     @property
-    def timeout(self) -> float:
-        """Default read timeout in seconds."""
-        return self.options.timeout
+    def timeout_s(self) -> float:
+        """Get the default read timeout in seconds.
+
+        Returns:
+            float: The default read timeout in seconds.
+        """
+        return self.options.timeout_s
 
     def write(self, data: bytes) -> None:
-        """Send `data` to the device."""
-        with self._access(self.timeout):
+        """Send `data` to the device.
+
+        Args:
+            data (bytes): The data to send.
+        """
+        with self._access(self.timeout_s):
             self._ensure_open()
             self._select_protocol("raw")
             self._write(data)
 
-    def read(self, size: int, timeout: float) -> bytes:
-        """Collect `size` bytes within one deadline, returning partial data on timeout or EOF."""
-        with self._access(timeout) as remaining:
+    def read(self, size: int, timeout_s: float) -> bytes:
+        """Collect `size` bytes within a single deadline of `timeout_s`, returning partial data on timeout or EOF.
+
+        Args:
+            size (int): The number of bytes to read.
+            timeout_s (float): The read timeout in seconds.
+
+        Raises:
+            EOFError: If the end of the stream is reached before reading any data.
+
+        Returns:
+            bytes: The data read.
+        """
+        with self._access(timeout_s) as remaining:
             self._ensure_open()
             self._select_protocol("raw")
             data, ended = self._read(size, remaining)
@@ -97,102 +141,127 @@ class Connection:
                 raise EOFError("end of stream")
             return data
 
-    def read_exactly(self, size: int, timeout: float) -> bytes:
-        """Read one fixed-size packet or report a timeout or end of stream with partial data."""
-        with self._access(timeout) as remaining:
+    def read_exactly(self, size: int, timeout_s: float) -> bytes:
+        """Read a single, fixed-size packet or report a timeout or end of stream with partial data.
+
+        Args:
+            size (int): The number of bytes to read.
+            timeout_s (float): The read timeout in seconds.
+
+        Returns:
+            bytes: The data read.
+        """
+        with self._access(timeout_s) as remaining:
             self._ensure_open()
             self._select_protocol("raw")
             return self._read_exactly(size, remaining)
 
-    def request(self, data: bytes, size: int, timeout: float) -> bytes:
-        """Send data and read a fixed-size reply without another caller interleaving I/O.
+    def request(self, data: bytes, size: int, timeout_s: float) -> bytes:
+        """Send `data` and read a fixed-size reply while preventing concurrent interleaving I/O.
 
-        The response timeout starts after the write. Lock acquisition is bounded separately by the same timeout;
+        The response timeout starts after the write is complete. Lock acquisition is bounded separately by the same timeout;
         the transport is responsible for bounding its write. No queued input is discarded and no write is retried.
+
+        Args:
+            data (bytes): The request data.
+            size (int): The number of bytes to read.
+            timeout_s (float): The response timeout in seconds.
+
+        Raises:
+            ValueError: If `size` is not positive.
+
+        Returns:
+            bytes: The response data.
         """
         if size < 1:
             raise ValueError("size must be positive")
-        with self._access(timeout):
+        with self._access(timeout_s):
             self._ensure_open()
             self._select_protocol("raw")
             self._write(data)
-            return self._read_exactly(size, timeout)
+            return self._read_exactly(size, timeout_s)
 
-    def read_chunk(self, timeout: float) -> bytes:
-        """Wait up to `timeout` seconds for data and return what arrived (see `Transport.read_chunk`)."""
-        with self._access(timeout) as remaining:
+    def read_chunk(self, timeout_s: float) -> bytes:
+        """Wait up to `timeout_s` seconds for data and return what arrived (see `Transport.read_chunk`).
+
+        Args:
+            timeout_s (float): The maximum time to wait for data in seconds.
+
+        Raises:
+            CommandError: If reading fails.
+
+        Returns:
+            bytes: The data read.
+        """
+        with self._access(timeout_s) as remaining:
             self._ensure_open()
             self._select_protocol("raw")
             try:
                 return self.transport.read_chunk(remaining)
             except OSError as error:
-                raise CommandError(
-                    f"cannot read from '{self.name}': {error}"
-                ) from error
+                raise CommandError(f"cannot read from '{self.name}': {error}") from error
 
     def check_protocol(self, name: str) -> None:
         """Validate protocol selection before command side effects, without reading or writing.
 
         Args:
-            name: Protocol identifier; raw selects existing unframed access.
+            name (str): The name of the protocol; raw selects existing unframed access.
 
         Raises:
             CommandError: If selection is unknown, incompatible or would abandon buffered input.
         """
-        with self._access(self.timeout):
+        with self._access(self.timeout_s):
             self._ensure_open()
             self._select_protocol(name)
 
     def send_message(
-        self, payload: bytes, protocol: str, *, options: Mapping[str, str] | None = None
+        self,
+        payload: bytes,
+        protocol: str,
+        *,
+        options: Mapping[str, str] | None = None,
     ) -> bytes:
         """Frame and send a payload once under the connection lock.
 
         Args:
-            payload: Application bytes without protocol framing.
-            protocol: Registered message protocol identifier.
-            options: Protocol-specific per-message fields.
-
-        Returns:
-            The wire bytes accepted by the transport.
+            payload (bytes): Application bytes without protocol framing.
+            protocol (str): Registered message protocol identifier.
+            options (Mapping[str, str] | None, optional): Protocol-specific per-message fields. Defaults to None.
 
         Raises:
             CommandError: If protocol selection, framing or writing fails.
+
+        Returns:
+            bytes: The wire bytes sent.
         """
-        with self._access(self.timeout):
+        with self._access(self.timeout_s):
             self._ensure_open()
             session = self._message_session(protocol)
-            wire = (
-                session.encode(payload, options=options)
-                if options
-                else session.encode(payload)
-            )
+            wire = session.encode(payload, options=options) if options else session.encode(payload)
             self._write(wire)
             return wire
 
-    def receive_message(self, protocol: str, timeout: float) -> Message | None:
+    def receive_message(self, protocol: str, timeout_s: float) -> Message | None:
         """Receive a message while preserving protocol state between calls.
 
         Args:
-            protocol: Registered message protocol identifier.
-            timeout: Overall timeout including lock acquisition, in seconds.
-
-        Returns:
-            One complete message, or None on timeout.
+            protocol (str): The protocol identifier.
+            timeout_s (float): Overall timeout in seconds.
 
         Raises:
             CommandError: If protocol selection, framing or reading fails.
             EOFError: If the stream ends cleanly.
+
+        Returns:
+            Message | None: The received message or None on timeout.
         """
-        with self._access(timeout) as remaining:
+        with self._access(timeout_s) as remaining:
             self._ensure_open()
             session = self._message_session(protocol)
             try:
                 return session.receive(self.transport, remaining)
             except OSError as error:
-                raise CommandError(
-                    f"cannot read from '{self.name}': {error}"
-                ) from error
+                raise CommandError(f"cannot read from '{self.name}': {error}") from error
             finally:
                 self._report_diagnostics(session)
 
@@ -200,42 +269,45 @@ class Connection:
         self,
         payload: bytes,
         protocol: str,
-        timeout: float,
+        timeout_s: float,
         *,
         options: Mapping[str, str] | None = None,
     ) -> Message | None:
         """Serialize a complete protocol request and response without automatic retries.
 
         Args:
-            payload: Application request bytes.
-            protocol: Registered message protocol identifier.
-            timeout: Response timeout after writing; lock acquisition is bounded separately.
-            options: Protocol-specific per-message fields.
-
-        Returns:
-            The response message, or None on timeout.
+            payload (bytes): The request payload.
+            protocol (str): The protocol identifier.
+            timeout_s (float): Response timeout in seconds.
+            options (Mapping[str, str] | None, optional): Protocol-specific per-message fields. Defaults to None.
 
         Raises:
             CommandError: If protocol selection, framing or communication fails.
             EOFError: If the stream ends cleanly before a response arrives.
+
+        Returns:
+            Message | None: The response message or None on timeout.
         """
-        with self._access(timeout):
+        with self._access(timeout_s):
             self._ensure_open()
             session = self._message_session(protocol)
             try:
                 if options:
-                    return session.request(
-                        self.transport, payload, timeout, options=options
-                    )
-                return session.request(self.transport, payload, timeout)
+                    return session.request(self.transport, payload, timeout_s, options=options)
+                return session.request(self.transport, payload, timeout_s)
             except OSError as error:
-                raise CommandError(
-                    f"communication failed on '{self.name}': {error}"
-                ) from error
+                raise CommandError(f"communication failed on '{self.name}': {error}") from error
             finally:
                 self._report_diagnostics(session)
 
     def _report_diagnostics(self, session: ProtocolSession) -> None:
+        """Log diagnostic data from `session` to the diagnostic logging callback, if available.
+
+        If no callback is available, a UserWarning will be thrown with the diagnostic data.
+
+        Args:
+            session (ProtocolSession): The session to report diagnostics from.
+        """
         if isinstance(session, ProtocolDiagnostics):
             for message in session.drain_diagnostics():
                 text = f"{self.name}: {message}"
@@ -245,8 +317,12 @@ class Connection:
                     warn(text, RuntimeWarning, stacklevel=3)
 
     def close(self) -> None:
-        """Close the owned transport once; allow retrying a failed close."""
-        with self._access(self.timeout):
+        """Close the owned transport once; allow retrying a failed close.
+
+        Raises:
+            CommandError: If closing the transport fails.
+        """
+        with self._access(self.timeout_s):
             if self._closed:
                 return
             try:
@@ -256,11 +332,25 @@ class Connection:
             self._closed = True
 
     @contextmanager
-    def _access(self, timeout: float) -> Generator[float, None, None]:
-        if not isfinite(timeout) or timeout < 0:
+    def _access(self, timeout_s: float) -> Generator[float, None, None]:
+        """Context manager which guarantees locked access to the connection/transport for `timeout_s` seconds.
+
+        The lock is automatically released upon exit.
+
+        Args:
+            timeout_s (float): Timeout in seconds.
+
+        Raises:
+            ValueError: If timeout_s is not finite or negative
+            CommandError: If the lock cannot be acquired within timeout_s
+
+        Yields:
+            Generator[float, None, None]: Remaining time in seconds
+        """
+        if not isfinite(timeout_s) or timeout_s < 0:
             raise ValueError("timeout must be finite and nonnegative")
-        deadline = monotonic() + timeout
-        if not self._lock.acquire(timeout=timeout):
+        deadline = monotonic() + timeout_s
+        if not self._lock.acquire(timeout=timeout_s):
             raise CommandError(f"timeout waiting for connection '{self.name}'")
         try:
             yield max(0.0, deadline - monotonic())
@@ -272,6 +362,18 @@ class Connection:
             raise CommandError(f"connection '{self.name}' is closed")
 
     def _select_protocol(self, name: str) -> ProtocolSession | None:
+        """Create a ProtocolSession associated with the given `name` to be used for an individual operation.
+
+        Args:
+            name (str): The protocol name.
+
+        Raises:
+            CommandError: If switching protocols fails.
+            CommandError: If there is pending input in the current session.
+
+        Returns:
+            ProtocolSession | None: The created session or None for raw protocol.
+        """
         name = name.strip().lower()
         if name == self._protocol_name:
             return self._session
@@ -297,15 +399,37 @@ class Connection:
         return session
 
     def _write(self, data: bytes) -> None:
+        """Write `data` to the current transport.
+
+        Args:
+            data (bytes): The data to write.
+
+        Raises:
+            CommandError: If writing fails.
+        """
         try:
             self.transport.write(data)
         except OSError as error:
             raise CommandError(f"cannot write to '{self.name}': {error}") from error
 
-    def _read(self, size: int, timeout: float) -> tuple[bytes, bool]:
+    def _read(self, size: int, timeout_s: float) -> tuple[bytes, bool]:
+        """Read `size` bytes from the current transport.
+
+        Args:
+            size (int): The number of bytes to read.
+            timeout_s (float): The read timeout in seconds.
+
+        Raises:
+            ValueError: If `size` is not positive.
+            CommandError: If reading fails.
+            CommandError: If the transport returns more bytes than requested.
+
+        Returns:
+            tuple[bytes, bool]: The read data and a flag indicating if the stream ended.
+        """
         if size < 1:
             raise ValueError("size must be positive")
-        deadline = monotonic() + timeout
+        deadline = monotonic() + timeout_s
         data = bytearray()
         while len(data) < size:
             remaining = max(0.0, deadline - monotonic())
@@ -316,23 +440,29 @@ class Connection:
             except EOFError:
                 return bytes(data), True
             except OSError as error:
-                raise CommandError(
-                    f"cannot read from '{self.name}': {error}"
-                ) from error
+                raise CommandError(f"cannot read from '{self.name}': {error}") from error
             if not chunk:
                 break
             if len(chunk) > size - len(data):
-                raise CommandError(
-                    f"transport for '{self.name}' returned more bytes than requested"
-                )
+                raise CommandError(f"transport for '{self.name}' returned more bytes than requested")
             data.extend(chunk)
         return bytes(data), False
 
-    def _read_exactly(self, size: int, timeout: float) -> bytes:
-        data, ended = self._read(size, timeout)
+    def _read_exactly(self, size: int, timeout_s: float) -> bytes:
+        """Read exactly `size` bytes within `timeout_s` seconds, enforcing an error if a complete result is not read.
+
+        Args:
+            size (int): The number of bytes to read.
+            timeout_s (float): The read timeout in seconds.
+
+        Raises:
+            CommandError: If reading exactly `size` bytes fails.
+
+        Returns:
+            bytes: The read data.
+        """
+        data, ended = self._read(size, timeout_s)
         if len(data) != size:
             reason = "stream ended" if ended else "timeout"
-            raise CommandError(
-                f"{reason}: got {len(data)} of {size} bytes ({data.hex()})"
-            )
+            raise CommandError(f"{reason}: got {len(data)} of {size} bytes ({data.hex()})")
         return data

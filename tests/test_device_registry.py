@@ -11,10 +11,10 @@ from rigbox.core.plugins import load_all
 from rigbox.core.registry import Registry
 from rigbox.core.workspace import Workspace
 from rigbox.plugins.device.commands import rigbox_register
-from rigbox.plugins.device.line_protocol import open_line
+from rigbox.plugins.device.protocols.line_protocol import open_line
 from rigbox.plugins.device.registry import DeviceRegistry
-from rigbox.plugins.device.serial_transport import open_serial
 from rigbox.plugins.device.transport import Transport, TransportOptions
+from rigbox.plugins.device.transports.serial_transport import open_serial
 
 
 def test_extensions_are_shared_per_type_and_isolated_per_registry() -> None:
@@ -56,18 +56,30 @@ def test_device_registration_works_in_either_hook_order(custom_first: bool) -> N
     context = Context(registry=registry)
     try:
         context.run("device.connect", {"name": "d", "url": "custom://", "timeout": 0.1})
-        assert context.run("device.request", {
-            "name": "d", "protocol": "custom-line", "text": "hello",
-        }).structured_data == {"size": 5, "hex": "68656c6c6f"}
-        assert context.run("device.request", {
-            "name": "d", "hex": "0102", "response_size": 2,
-        }).structured_data == {"size": 2, "hex": "0102"}
+        assert context.run(
+            "device.request",
+            {
+                "name": "d",
+                "protocol": "custom-line",
+                "text": "hello",
+            },
+        ).structured_data == {"size": 5, "hex": "68656c6c6f"}
+        assert context.run(
+            "device.request",
+            {
+                "name": "d",
+                "hex": "0102",
+                "response_size": 2,
+            },
+        ).structured_data == {"size": 2, "hex": "0102"}
     finally:
         context.close()
     assert context.connections == {}
 
 
-def test_workspace_plugin_registers_transport_and_protocol_through_device_api(tmp_path: Path) -> None:
+def test_workspace_plugin_registers_transport_and_protocol_through_device_api(
+    tmp_path: Path,
+) -> None:
     workspace = Workspace.init(tmp_path / "project")
     (workspace.plugins_dir / "comms.py").write_text(
         "from rigbox.hooks import hookimpl\n"
@@ -90,8 +102,13 @@ def test_workspace_plugin_registers_transport_and_protocol_through_device_api(tm
     context = Context(registry=registry, workspace=workspace)
     try:
         context.run("device.connect", {"name": "d", "url": "workspace://", "timeout": 0.1})
-        assert context.run("device.request", {
-            "name": "d", "protocol": "workspace-line", "text": "ok",
-        }).structured_data == {"size": 2, "hex": "6f6b"}
+        assert context.run(
+            "device.request",
+            {
+                "name": "d",
+                "protocol": "workspace-line",
+                "text": "ok",
+            },
+        ).structured_data == {"size": 2, "hex": "6f6b"}
     finally:
         context.close()

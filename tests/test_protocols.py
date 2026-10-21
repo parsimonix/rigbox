@@ -17,10 +17,10 @@ from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry
 from rigbox.core.render import normalize_structured_data
 from rigbox.core.workspace import Workspace
-from rigbox.plugins.device import line_protocol
 from rigbox.plugins.device.connection import Connection
-from rigbox.plugins.device.line_protocol import LineProtocol, open_line
 from rigbox.plugins.device.protocol import Message, ProtocolSession
+from rigbox.plugins.device.protocols import line_protocol
+from rigbox.plugins.device.protocols.line_protocol import LineProtocol, open_line
 from rigbox.plugins.device.registry import DeviceRegistry
 from rigbox.plugins.device.transport import TransportOptions
 
@@ -71,9 +71,7 @@ def ctx() -> Iterator[Context]:
         context.close()
 
 
-def run(
-    ctx: Context, command: str, args: dict[str, object] | None = None
-) -> list[dict[str, Any]]:
+def run(ctx: Context, command: str, args: dict[str, object] | None = None) -> list[dict[str, Any]]:
     # Command results are dynamically shaped rows, normalized through the public rendering helper.
     return normalize_structured_data(ctx.run(command, args).structured_data)
 
@@ -94,9 +92,7 @@ def test_protocol_discovery_and_raw_default(ctx: Context) -> None:
     rows = {row["protocol"]: row["description"] for row in run(ctx, "device.protocols")}
     assert set(rows) == {"raw", "line"}
     assert "LF" in rows["line"]
-    assert run(
-        ctx, "device.request", {"name": "d", "text": "hi", "response_size": 2}
-    ) == [{"size": 2, "hex": "6869"}]
+    assert run(ctx, "device.request", {"name": "d", "text": "hi", "response_size": 2}) == [{"size": 2, "hex": "6869"}]
     assert run(
         ctx,
         "device.request",
@@ -105,22 +101,18 @@ def test_protocol_discovery_and_raw_default(ctx: Context) -> None:
 
 
 def test_line_send_expect_and_request_use_shared_parser(ctx: Context) -> None:
-    assert normalize_structured_data(
-        ctx.run_line("device.send d --protocol LINE --text hi").structured_data
-    ) == [{"name": "d", "protocol": "line", "sent": 3, "hex": "68690a"}]
+    assert normalize_structured_data(ctx.run_line("device.send d --protocol LINE --text hi").structured_data) == [
+        {"name": "d", "protocol": "line", "sent": 3, "hex": "68690a"}
+    ]
     assert ctx.run_line("device.expect d --protocol line").structured_data == {
         "size": 2,
         "hex": "6869",
     }
-    assert ctx.run_line(
-        "device.request d --protocol line --text status"
-    ).structured_data == {"size": 6, "hex": "737461747573"}
+    assert ctx.run_line("device.request d --protocol line --text status").structured_data == {"size": 6, "hex": "737461747573"}
 
 
 def test_empty_message_is_not_a_timeout(ctx: Context, tmp_path: Path) -> None:
-    assert run(
-        ctx, "device.request", {"name": "d", "protocol": "line", "text": ""}
-    ) == [{"size": 0, "hex": ""}]
+    assert run(ctx, "device.request", {"name": "d", "protocol": "line", "text": ""}) == [{"size": 0, "hex": ""}]
     ctx.run("device.send", {"name": "d", "protocol": "line", "text": ""})
     out = tmp_path / "empty.ndjson"
     summary = run(
@@ -154,19 +146,13 @@ def test_partial_timeout_is_retained_and_prevents_raw_access(ctx: Context) -> No
         connection.write(b"raw")
     assert transport.written == []
     transport.chunks.append(b"ial\n")
-    assert run(ctx, "device.expect", {"name": "stub", "protocol": "line"}) == [
-        {"size": 7, "hex": b"partial".hex()}
-    ]
+    assert run(ctx, "device.expect", {"name": "stub", "protocol": "line"}) == [{"size": 7, "hex": b"partial".hex()}]
     connection.write(b"raw")
     assert transport.written == [b"raw"]
 
 
-@pytest.mark.parametrize(
-    "command", ["device.send", "device.expect", "device.request", "device.capture"]
-)
-def test_all_raw_commands_respect_pending_protocol_input(
-    ctx: Context, tmp_path: Path, command: str
-) -> None:
+@pytest.mark.parametrize("command", ["device.send", "device.expect", "device.request", "device.capture"])
+def test_all_raw_commands_respect_pending_protocol_input(ctx: Context, tmp_path: Path, command: str) -> None:
     connection = connect_stub(ctx, ChunkTransport(b"first\nsecond\n"))
     assert connection.receive_message("line", 1) == Message(b"first", b"first\n")
     args: dict[str, object] = {"name": "stub"}
@@ -198,16 +184,12 @@ def test_sessions_are_per_connection_and_factory_is_reused(ctx: Context) -> None
     devices = ctx.registry.extension(DeviceRegistry)
     devices.add_protocol("custom", factory)
     a = connect_stub(ctx, ChunkTransport(b"a", b""))
-    b = Connection(
-        "other", "stub://", ChunkTransport(b"b\n"), TransportOptions(), registry=devices
-    )
+    b = Connection("other", "stub://", ChunkTransport(b"b\n"), TransportOptions(), registry=devices)
     ctx.connections["other"] = b
     assert a.receive_message("custom", 1) is None
     assert b.receive_message("custom", 1) == Message(b"b", b"b\n")
     assert a.receive_message("custom", 0) is None
-    assert (
-        len(created) == 2 and created[0].pending_input and not created[1].pending_input
-    )
+    assert len(created) == 2 and created[0].pending_input and not created[1].pending_input
     assert schemes == ["stub", "stub"]
 
 
@@ -371,14 +353,10 @@ def test_protocol_registration_compatibility_and_factory_errors(ctx: Context) ->
             ctx.run("device.send", {"name": "d", "protocol": name, "text": "hi"})
 
 
-def test_capture_preserves_wire_bytes_and_replays_protocol_messages(
-    ctx: Context, tmp_path: Path
-) -> None:
+def test_capture_preserves_wire_bytes_and_replays_protocol_messages(ctx: Context, tmp_path: Path) -> None:
     connect_stub(ctx, ChunkTransport(b"a\n\npar", b"t\n", ended=True))
     path = tmp_path / "lines.ndjson"
-    summary = run(
-        ctx, "device.capture", {"name": "stub", "protocol": "line", "out": str(path)}
-    )[0]
+    summary = run(ctx, "device.capture", {"name": "stub", "protocol": "line", "out": str(path)})[0]
     assert (summary["packets"], summary["errors"]) == (3, 0)
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert [row["hex"] for row in rows] == ["610a", "0a", "706172740a"]
@@ -386,19 +364,12 @@ def test_capture_preserves_wire_bytes_and_replays_protocol_messages(
     assert all(row["protocol"] == "line" for row in rows)
     ctx.run("device.connect", {"name": "r", "url": f"replay://{path}"})
     for payload in ("61", "", "70617274"):
-        assert (
-            run(ctx, "device.expect", {"name": "r", "protocol": "line"})[0]["hex"]
-            == payload
-        )
+        assert run(ctx, "device.expect", {"name": "r", "protocol": "line"})[0]["hex"] == payload
 
 
-def test_protocol_manifest_decodes_payload_not_wire_bytes(
-    ctx: Context, tmp_path: Path
-) -> None:
+def test_protocol_manifest_decodes_payload_not_wire_bytes(ctx: Context, tmp_path: Path) -> None:
     path = tmp_path / "byte.yaml"
-    path.write_text(
-        "name: byte\nfields:\n  - {name: value, type: u8}\n", encoding="utf-8"
-    )
+    path.write_text("name: byte\nfields:\n  - {name: value, type: u8}\n", encoding="utf-8")
     assert run(
         ctx,
         "device.request",
@@ -425,9 +396,7 @@ def test_protocol_manifest_decodes_payload_not_wire_bytes(
     assert json.loads(capture.read_text())["decoded"] == {"value": 43}
 
 
-def test_capture_count_retains_extra_messages_for_next_operation(
-    ctx: Context, tmp_path: Path
-) -> None:
+def test_capture_count_retains_extra_messages_for_next_operation(ctx: Context, tmp_path: Path) -> None:
     connect_stub(ctx, ChunkTransport(b"first\nsecond\n"))
     path = tmp_path / "one.ndjson"
     summary = run(
@@ -436,19 +405,13 @@ def test_capture_count_retains_extra_messages_for_next_operation(
         {"name": "stub", "protocol": "line", "count": 1, "out": str(path)},
     )[0]
     assert summary["packets"] == 1
-    assert run(ctx, "device.expect", {"name": "stub", "protocol": "line"}) == [
-        {"size": 6, "hex": b"second".hex()}
-    ]
+    assert run(ctx, "device.expect", {"name": "stub", "protocol": "line"}) == [{"size": 6, "hex": b"second".hex()}]
 
 
-def test_capture_records_payload_decode_errors_with_wire_evidence(
-    ctx: Context, tmp_path: Path
-) -> None:
+def test_capture_records_payload_decode_errors_with_wire_evidence(ctx: Context, tmp_path: Path) -> None:
     connect_stub(ctx, ChunkTransport(b"\x01\n", ended=True))
     manifest = tmp_path / "pair.yaml"
-    manifest.write_text(
-        "name: pair\nfields:\n  - {name: value, type: u16}\n", encoding="utf-8"
-    )
+    manifest.write_text("name: pair\nfields:\n  - {name: value, type: u16}\n", encoding="utf-8")
     out = tmp_path / "bad.ndjson"
     summary = run(
         ctx,
@@ -482,9 +445,7 @@ def test_request_response_budget_starts_after_write(
 
     monkeypatch.setattr(line_protocol, "monotonic", clock)
     transport = SlowWriter(b"reply\n")
-    assert LineProtocol().request(transport, b"query", 1) == Message(
-        b"reply", b"reply\n"
-    )
+    assert LineProtocol().request(transport, b"query", 1) == Message(b"reply", b"reply\n")
     assert transport.waits == [1]
 
 
@@ -503,9 +464,7 @@ def test_workspace_plugin_can_register_a_protocol(tmp_path: Path) -> None:
     load_all(registry, workspace)
     context = Context(registry=registry, workspace=workspace)
     try:
-        assert "custom-line" in {
-            row["protocol"] for row in run(context, "device.protocols")
-        }
+        assert "custom-line" in {row["protocol"] for row in run(context, "device.protocols")}
         context.run("device.connect", {"name": "d", "url": "loop://"})
         assert run(
             context,
