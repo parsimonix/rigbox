@@ -82,20 +82,21 @@ def test_builtin_transports_are_listed_with_descriptions(ctx: Context) -> None:
     result = ctx.run("device.transports").structured_data
     assert isinstance(result, list)
     rows = {r["scheme"]: r["description"] for r in result}
-    assert set(rows) == {"serial", "loop", "socket", "rfc2217", "replay"}
-    assert len(set(rows.values())) == 5
+    assert set(rows) == {"serial", "loop", "socket", "rfc2217", "replay", "hid"}
+    assert len(set(rows.values())) == 6
     assert "Local serial port via pyserial" in rows["serial"]
     assert "In-memory loopback" in rows["loop"] and "loop://" in rows["loop"]
     assert "Raw TCP" in rows["socket"] and "no remote serial-port configuration" in rows["socket"]
     assert "Telnet/RFC2217" in rows["rfc2217"] and "port settings" in rows["rfc2217"]
     assert "replay://" in rows["replay"] and "no timing replay or responses to writes" in rows["replay"]
+    assert "HID reports" in rows["hid"] and "hid://" in rows["hid"]
 
 
 def test_registry_rejects_duplicate_and_unknown_schemes(ctx: Context) -> None:
     devices = ctx.registry.extension(DeviceRegistry)
     with pytest.raises(ValueError, match="duplicate transport scheme: loop"):
         devices.add_transport("LOOP", lambda url, options: devices.open_transport("loop://", options))
-    with pytest.raises(CommandError, match=r"known schemes: loop, replay, rfc2217, serial, socket"):
+    with pytest.raises(CommandError, match=r"known schemes: hid, loop, replay, rfc2217, serial, socket"):
         devices.open_transport("nope://", TransportOptions())
 
 

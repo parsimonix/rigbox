@@ -13,6 +13,87 @@ Connections use a URL to choose a **transport**:
 | `socket://host:port` | Pyserial's raw TCP byte stream; does not configure a remote serial port |
 | `rfc2217://host:port` | Pyserial's remote serial port over Telnet/RFC2217; carries data and serial settings to a compatible server |
 | `replay://captures\run1.ndjson` | Reads recorded RX hex bytes from NDJSON in file order, on demand, without recorded timing; writes are retained in memory but do not generate responses |
+| `hid://` | HIDAPI input/output reports; select a device with `--param vendor_id=... --param product_id=...` or `--param path=...` |
+
+### HID reports
+
+```text
+rigbox> device.connect usb hid:// --param vendor_id=0x1234 --param product_id=0x5678
+rigbox> device.send usb --hex "00 01 02 00"
+rigbox> device.expect usb --size 4
+rigbox> device.close usb
+```
+
+Each write is one complete output report, including its report ID; use `00` for an unnumbered report.
+Supply any device-required padding yourself. The transport never inserts/removes IDs, pads, splits, or retries writes.
+Input retains exactly the bytes HIDAPI returns: numbered reports include their ID; unnumbered reports do not
+include a synthetic zero ID. Short reads retain the remainder, including padding. `read_chunk` returns one report
+or its unread remainder; fixed-size `device.expect` can assemble bytes across reports, so it does not expose boundaries.
+There is no automatic RACE-over-HID adaptation; protocols must account for these report bytes themselves.
+
+VID/PID accept decimal or `0x`-prefixed hex. Add `--param serial_number=...` to select among identical devices,
+or use `--param path=...` alone for an enumerated HIDAPI path. `--param read_size=...` sets the input buffer size
+(default and maximum 65536 bytes); it must cover the largest input report, including any ID, to avoid truncation.
+HIDAPI supplies no portable report-size discovery through this binding. Read timeouts have millisecond resolution;
+positive sub-millisecond values round up. Explicit `--write-timeout` is rejected because the binding cannot enforce it;
+HID writes use the native blocking behavior. `--baud` is ignored, and `device.ports` still lists serial ports only.
+
+### Plugin-provided HID profiles
+
+A plugin can register known interfaces and report layouts through the existing hook:
+
+```python
+from rigbox.core.registry import Registry
+from rigbox.hooks import hookimpl
+from rigbox.plugins.device.hid_catalog import HIDDeviceSpec, HIDReportSpec
+from rigbox.plugins.device.registry import DeviceRegistry
+
+
+@hookimpl
+def rigbox_register(registry: Registry) -> None:
+  """Register Acme's known HID interface.
+
+  Args:
+    registry: Command registry that owns the device catalog.
+  """
+  registry.extension(DeviceRegistry).add_hid_device(
+    "acme.board",
+    HIDDeviceSpec(
+      vendor_id=0x1234,
+      product_id=0x5678,
+      description="Acme development board",
+      usage_page=0xFF00,
+      usage=1,
+      reports=(
+        HIDReportSpec(report_id=7, kind="input", length=64, protocol="line"),
+        HIDReportSpec(report_id=8, kind="output", length=32, protocol="line"),
+      ),
+    ),
+  )
+```
+
+Names are case-insensitive and preferably namespaced; duplicate names are rejected, while overlapping selectors
+are allowed. Profiles and reports are immutable validated models. Selectors match exact VID/PID and optional
+usage page, usage and interface number. Report IDs may repeat across input/output/feature kinds, but each
+kind/ID pair must be unique. Registration does not open hardware and works independently of plugin hook order.
+
+```text
+rigbox> device.discover
+rigbox> device.discover --known-only
+rigbox> device.connect usb hid:// --param device=acme.board --param serial_number=unit-1
+```
+
+Discovery lists all HID interfaces by default, including unknown devices, and reports every matching profile
+with its declared report layouts. No profile is needed to discover or directly connect by VID/PID or path.
+Named connections always enumerate and open the selected exact path. Multiple matches are an error; select
+one using `serial_number` or `path`. These filters must still match the profile, and named selection cannot be
+combined with explicit VID/PID. `device.discover` is read-only and excluded from command history.
+
+Report `length` is the HIDAPI buffer size: numbered reports include their ID; unnumbered input has no ID byte,
+while unnumbered output/feature buffers include HIDAPI's required leading zero. Lengths are per report and
+direction, not a single device-wide payload limit. Profiles describe expected layouts; they do not read report
+descriptors, enforce lengths on raw writes, resize the raw read buffer, insert IDs/padding, select protocols,
+or perform feature-report I/O. Report routing and protocol-specific wrapping/reassembly are a later slice.
 
 ## What is a transport?
 

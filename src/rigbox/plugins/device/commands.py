@@ -22,10 +22,12 @@ from rigbox.core.registry import CommandError, NoArgs, Registry
 from rigbox.core.render import RigboxCmdResult
 from rigbox.hooks import hookimpl
 from rigbox.plugins.device.connection import Connection
+from rigbox.plugins.device.hid_catalog import discover_hid, select_hid_device
 from rigbox.plugins.device.protocol import Message
 from rigbox.plugins.device.protocols.line_protocol import open_line
 from rigbox.plugins.device.registry import DeviceRegistry
 from rigbox.plugins.device.transport import TransportOptions
+from rigbox.plugins.device.transports.hid_transport import open_hid
 from rigbox.plugins.device.transports.replay_transport import open_replay
 from rigbox.plugins.device.transports.serial_transport import open_serial
 from rigbox.plugins.manifests.api import Codec, parse_values, resolve_manifest
@@ -45,7 +47,7 @@ class ConnectArgs(BaseModel):
         None,
         gt=0,
         allow_inf_nan=False,
-        description="Serial write deadline in seconds (default: --timeout; unsupported by RFC2217)",
+        description="Serial write deadline in seconds (default: --timeout; unsupported by RFC2217 and HID)",
     )
     param: list[str] = Field(
         default_factory=list,
@@ -57,6 +59,12 @@ class NameArgs(BaseModel):
     """Arguments for commands that act on one named connection."""
 
     name: str = Field(description="Connection name")
+
+
+class DiscoverArgs(BaseModel):
+    """Arguments for HID interface discovery."""
+
+    known_only: bool = Field(False, description="Only show HID interfaces matching a plugin-provided device profile")
 
 
 class ProtocolArgs(NameArgs):
@@ -276,6 +284,7 @@ def rigbox_register(registry: Registry) -> None:
     for scheme in ("serial", "loop", "socket", "rfc2217"):
         devices.add_transport(scheme, open_serial)
     devices.add_transport("replay", open_replay)
+    devices.add_transport("hid", open_hid)
     devices.add_protocol("line", open_line)
 
     @registry.command("device.protocols", record=False)
@@ -336,17 +345,36 @@ def rigbox_register(registry: Registry) -> None:
         """Open a named connection to a device."""
         if args.name in ctx.connections:
             raise CommandError(f"connection '{args.name}' already exists")
+        devices = ctx.registry.extension(DeviceRegistry)
+        params = _parse_params(args.param)
+        if args.url.lower() == "hid://" and "device" in params:
+            params = select_hid_device(devices.hid_devices, params)
         options = TransportOptions(
             timeout_s=args.timeout,
             baud=args.baud,
-            params=_parse_params(args.param),
+            params=params,
             write_timeout_s=args.write_timeout,
         )
-        devices = ctx.registry.extension(DeviceRegistry)
         transport = devices.open_transport(args.url, options)
         connection = Connection(args.name, args.url, transport, options, registry=devices, log=ctx.log)
         ctx.connections[args.name] = connection
         return {"name": args.name, "url": args.url, "transport": connection.scheme}
+
+    @registry.command("device.discover", args=DiscoverArgs, record=False)
+    def discover(ctx: Context, args: DiscoverArgs) -> list[dict[str, object]]:
+        """List connected HID interfaces and matching plugin-provided report profiles.
+
+        Args:
+            ctx: Current command context.
+            args: Discovery filtering options.
+
+        Returns:
+            Interface identity, exact path, matching profile names and declared report layouts.
+
+        Raises:
+            CommandError: If HIDAPI enumeration fails.
+        """
+        return discover_hid(ctx.registry.extension(DeviceRegistry).hid_devices, known_only=args.known_only)
 
     @registry.command("device.close", args=NameArgs)
     def close(ctx: Context, args: NameArgs) -> None:

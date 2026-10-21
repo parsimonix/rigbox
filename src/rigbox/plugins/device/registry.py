@@ -1,4 +1,4 @@
-"""Register device transports and message protocols independently of command dispatch.
+"""Register device transports, message protocols and HID profiles independently of command dispatch.
 
 Plugins share a DeviceRegistry through Registry.extension(DeviceRegistry), even when their registration
 hooks run before the device command hook. Each command registry owns its own set of device factories.
@@ -7,6 +7,7 @@ hooks run before the device command hook. Each command registry owns its own set
 from __future__ import annotations
 
 from rigbox.core.registry import CommandError
+from rigbox.plugins.device.hid_catalog import HIDDeviceSpec
 from rigbox.plugins.device.protocol import ProtocolFactory, ProtocolSession
 from rigbox.plugins.device.transport import (
     Transport,
@@ -17,12 +18,28 @@ from rigbox.plugins.device.transport import (
 
 
 class DeviceRegistry:
-    """Keep transport and message protocol factories for the device subsystem."""
+    """Keep transport/protocol factories and known HID profiles for the device subsystem."""
 
     def __init__(self) -> None:
         """Create an empty device registry without opening resources or registering defaults."""
         self.transports: dict[str, TransportFactory] = {}
         self.protocols: dict[str, ProtocolFactory] = {}
+        self.hid_devices: dict[str, HIDDeviceSpec] = {}
+
+    def add_hid_device(self, name: str, spec: HIDDeviceSpec) -> None:
+        """Register a named HID profile without enumerating or opening hardware.
+
+        Args:
+            name: Case-insensitive identifier, preferably namespaced by the contributing plugin.
+            spec: Validated device selectors and report definitions.
+
+        Raises:
+            ValueError: If the name is empty, contains whitespace or is already registered.
+        """
+        name = name.strip().lower()
+        if not name or any(character.isspace() for character in name) or name in self.hid_devices:
+            raise ValueError(f"duplicate or invalid HID device identifier: {name!r}")
+        self.hid_devices[name] = spec
 
     def add_transport(self, scheme: str, factory: TransportFactory) -> None:
         """Register a factory for URLs of the form <scheme>://....
