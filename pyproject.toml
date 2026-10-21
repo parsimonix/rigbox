@@ -14,6 +14,7 @@ authors = [
 dependencies = [
     "cmd2>=4.3,<5",
     "construct>=2.10",
+    "hidapi>=0.14.0.post4",
     "jinja2>=3.1.6",
     "networkx>=3.4,<4",
     "numpy>=1.24",
@@ -28,10 +29,13 @@ dependencies = [
     "typer>=0.27.3",
 ]
 
-[project.optional-dependencies]
-plot = ["matplotlib>=3.7"]
-# ty is pinned exactly: it is in beta (0.0.x) and its rules change between releases
-dev = ["pytest>=7", "matplotlib>=3.7", "ruff>=0.6", "ty==0.0.89"]
+[dependency-groups]
+dev = [
+    "hidapi-stubs>=0.14.0.post1",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "ty==0.0.89",
+]
 
 [project.scripts]
 rigbox = "rigbox.cli:cli"
@@ -121,3 +125,5 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]  # tests are annotated like other code, but test functions don't need docstrings
+
+
