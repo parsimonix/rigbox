@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import sys
 from collections.abc import Callable
 from functools import partial
 from importlib.metadata import entry_points
@@ -72,5 +73,14 @@ def _import_file(path: Path) -> ModuleType:
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load plugin file: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
+        raise
     return module

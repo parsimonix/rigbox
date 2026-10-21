@@ -31,11 +31,11 @@ class ReverseTransport:
     def write(self, data: bytes) -> None:
         self._pending += data[::-1]
 
-    def read(self, size: int, timeout: float) -> bytes:
+    def read(self, size: int, timeout_s: float) -> bytes:
         out, self._pending = self._pending[:size], self._pending[size:]
         return out
 
-    def read_chunk(self, timeout: float) -> bytes:
+    def read_chunk(self, timeout_s: float) -> bytes:
         out, self._pending = self._pending, b""
         return out
 
@@ -176,7 +176,7 @@ def test_connect_passes_options_and_rejects_bad_params() -> None:
     devices.add_transport("rec", recording)
     ctx = Context(registry=reg)
     ctx.run("device.connect", {"name": "a", "url": "rec://", "baud": 9600, "timeout": 0.5, "param": ["k=v", "e=a=b"]})
-    assert seen == [TransportOptions(timeout=0.5, baud=9600, params={"k": "v", "e": "a=b"})]
+    assert seen == [TransportOptions(timeout_s=0.5, baud=9600, params={"k": "v", "e": "a=b"})]
     for bad in ("novalue", "=x"):
         with pytest.raises(CommandError, match="--param expects key=value"):
             ctx.run("device.connect", {"name": "b", "url": "rec://", "param": [bad]})

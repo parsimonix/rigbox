@@ -30,7 +30,7 @@ class TransportOptions:
     """Extra transport-specific ``key=value`` options (``device.connect --param key=value``)."""
 
     write_timeout_s: float | None = None
-    """Write deadline in seconds where supported; serial defaults to ``timeout`` (RFC2217 is an exception)."""
+    """Write deadline in seconds where supported; serial defaults to ``timeout_s`` (RFC2217 is an exception)."""
 
 
 class Transport(Protocol):

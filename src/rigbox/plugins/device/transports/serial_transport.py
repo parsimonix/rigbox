@@ -27,17 +27,17 @@ class SerialTransport:
         Raises:
             CommandError: If the port cannot be opened.
         """
-        self._write_timeout: float | None = options.write_timeout_s if options.write_timeout_s is not None else options.timeout_s
+        self._write_timeout_s: float | None = options.write_timeout_s if options.write_timeout_s is not None else options.timeout_s
         if scheme_of(url) == "rfc2217":
             if options.write_timeout_s is not None:
                 raise CommandError("pyserial's RFC2217 transport does not support --write-timeout")
-            self._write_timeout = None
+            self._write_timeout_s = None
         try:
             self._port = serial.serial_for_url(
                 url.removeprefix("serial://"),
                 baudrate=options.baud or self.DEFAULT_BAUD,
                 timeout=options.timeout_s,
-                write_timeout=self._write_timeout,
+                write_timeout=self._write_timeout_s,
             )
         except (serial.SerialException, ValueError, OSError) as e:
             raise CommandError(f"cannot open {url}: {e}") from None
@@ -55,14 +55,14 @@ class SerialTransport:
         """
         if not data:
             return
-        if self._write_timeout is None:
+        if self._write_timeout_s is None:
             if self._port.write(data) != len(data):
                 raise serial.SerialTimeoutException("incomplete write")
             return
-        deadline = time.monotonic() + self._write_timeout
+        deadline = time.monotonic() + self._write_timeout_s
         offset = 0
         while offset < len(data):
-            remaining = min(self._write_timeout, deadline - time.monotonic())
+            remaining = min(self._write_timeout_s, deadline - time.monotonic())
             if remaining <= 0:
                 raise serial.SerialTimeoutException(f"write timeout after {offset} of {len(data)} bytes")
             self._port.write_timeout = remaining

@@ -1,6 +1,7 @@
 """Connection: An actively owned transport to a device.
 
 Connections manage an open transport, coordinate per-operation protocol state and provide raw I/O methods.
+Protocols with continuous request planning use one connection-owned receiver; other protocols remain synchronous.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ from typing import Self
 from warnings import warn
 
 from rigbox.core.registry import CommandError
-from rigbox.plugins.device.protocol import Message, ProtocolDiagnostics, ProtocolSession
+from rigbox.plugins.device.protocol import ContinuousProtocol, Message, ProtocolDiagnostics, ProtocolSession
+from rigbox.plugins.device.receiver import MessageReceiver
 from rigbox.plugins.device.registry import DeviceRegistry
 from rigbox.plugins.device.transport import Transport, TransportOptions, scheme_of
 
@@ -52,6 +54,7 @@ class Connection:
         self._registry = registry
         self._protocol_name: str = "raw"
         self._session: ProtocolSession | None = None
+        self._receiver: MessageReceiver | None = None
         self._log = log
 
     def __enter__(self) -> Self:
@@ -237,9 +240,16 @@ class Connection:
         with self._access(self.timeout_s):
             self._ensure_open()
             session = self._message_session(protocol)
-            wire = session.encode(payload, options=options) if options else session.encode(payload)
-            self._write(wire)
-            return wire
+            self._start_receiver(session)
+            try:
+                if self._receiver is not None:
+                    wire = self._receiver.encode(payload, options)
+                else:
+                    wire = session.encode(payload, options=options) if options else session.encode(payload)
+                self._write(wire)
+                return wire
+            finally:
+                self._report_diagnostics(session)
 
     def receive_message(self, protocol: str, timeout_s: float) -> Message | None:
         """Receive a message while preserving protocol state between calls.
@@ -258,7 +268,10 @@ class Connection:
         with self._access(timeout_s) as remaining:
             self._ensure_open()
             session = self._message_session(protocol)
+            self._start_receiver(session)
             try:
+                if self._receiver is not None:
+                    return self._receiver.receive(remaining)
                 return session.receive(self.transport, remaining)
             except OSError as error:
                 raise CommandError(f"cannot read from '{self.name}': {error}") from error
@@ -291,7 +304,10 @@ class Connection:
         with self._access(timeout_s):
             self._ensure_open()
             session = self._message_session(protocol)
+            self._start_receiver(session)
             try:
+                if self._receiver is not None:
+                    return self._receiver.request(payload, timeout_s, options)
                 if options:
                     return session.request(self.transport, payload, timeout_s, options=options)
                 return session.request(self.transport, payload, timeout_s)
@@ -308,13 +324,33 @@ class Connection:
         Args:
             session (ProtocolSession): The session to report diagnostics from.
         """
-        if isinstance(session, ProtocolDiagnostics):
-            for message in session.drain_diagnostics():
+        source = self._receiver if self._receiver is not None else session
+        if isinstance(source, ProtocolDiagnostics):
+            for message in source.drain_diagnostics():
                 text = f"{self.name}: {message}"
                 if self._log is not None:
                     self._log(text)
                 else:
                     warn(text, RuntimeWarning, stacklevel=3)
+
+    def receive_stats(self) -> dict[str, int]:
+        """Report continuous-reception queue occupancy and cumulative losses.
+
+        Returns:
+            Queue and overflow counters, or an empty mapping for synchronous sessions.
+        """
+        with self._access(self.timeout_s):
+            if self._receiver is None:
+                return {}
+            if self._session is not None:
+                self._report_diagnostics(self._session)
+            return self._receiver.stats()
+
+    def _start_receiver(self, session: ProtocolSession) -> None:
+        # Finite replay input needs consumer-driven pacing, not a live-stream overflow policy.
+        if self.scheme != "replay" and self._receiver is None and isinstance(session, ContinuousProtocol):
+            self._receiver = MessageReceiver(self.transport, session, session)
+            self._receiver.start()
 
     def close(self) -> None:
         """Close the owned transport once; allow retrying a failed close.
@@ -325,6 +361,10 @@ class Connection:
         with self._access(self.timeout_s):
             if self._closed:
                 return
+            if self._receiver is not None:
+                self._receiver.stop()
+                if self._session is not None:
+                    self._report_diagnostics(self._session)
             try:
                 self.transport.close()
             except OSError as error:
@@ -377,17 +417,31 @@ class Connection:
         name = name.strip().lower()
         if name == self._protocol_name:
             return self._session
-        if self._session is not None and self._session.pending_input:
+        receiver = self._receiver
+        if receiver is not None:
+            receiver.stop()
+        pending = receiver.pending_input if receiver is not None else self._session is not None and self._session.pending_input
+        if pending:
+            if receiver is not None:
+                receiver.start()
             raise CommandError(
                 f"cannot switch '{self.name}' from '{self._protocol_name}' to '{name}': "
                 "buffered input or a framing failure remains; drain with the same protocol or close and reconnect"
             )
-        if name == "raw":
-            session = None
-        elif self._registry is None:
-            raise CommandError("message protocols require a connection with a registry")
-        else:
-            session = self._registry.create_protocol(name, self.scheme)
+        try:
+            if name == "raw":
+                session = None
+            elif self._registry is None:
+                raise CommandError("message protocols require a connection with a registry")
+            else:
+                session = self._registry.create_protocol(name, self.scheme)
+        except Exception:
+            if receiver is not None:
+                receiver.start()
+            raise
+        if self._session is not None:
+            self._report_diagnostics(self._session)
+        self._receiver = None
         self._session = session
         self._protocol_name = name
         return session

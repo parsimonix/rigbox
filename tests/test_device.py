@@ -97,12 +97,12 @@ def test_request_tokens_parse_through_shared_parser(ctx: Context) -> None:
     assert ctx.run_line("device.request d --hex 0102 --response-size 2 --timeout 0.1") == [{"size": 2, "hex": "0102"}]
 
 
-@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), -1.0, 0.0])
-def test_connect_rejects_nonfinite_and_nonpositive_write_timeouts(ctx: Context, timeout: float) -> None:
+@pytest.mark.parametrize("timeout_s", [float("nan"), float("inf"), -1.0, 0.0])
+def test_connect_rejects_nonfinite_and_nonpositive_write_timeouts(ctx: Context, timeout_s: float) -> None:
     with pytest.raises(CommandError, match="write_timeout"):
         ctx.run(
             "device.connect",
-            {"name": "invalid", "url": "loop://", "write_timeout": timeout},
+            {"name": "invalid", "url": "loop://", "write_timeout": timeout_s},
         )
     assert [row["name"] for row in ctx.run("device.list")] == ["d"]
 

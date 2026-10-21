@@ -39,14 +39,14 @@ class ChunkTransport:
             raise self.error
         self.written.append(data)
 
-    def read(self, size: int, timeout: float) -> bytes:
-        chunk = self.read_chunk(timeout)
+    def read(self, size: int, timeout_s: float) -> bytes:
+        chunk = self.read_chunk(timeout_s)
         if len(chunk) > size:
             self.chunks.appendleft(chunk[size:])
         return chunk[:size]
 
-    def read_chunk(self, timeout: float) -> bytes:
-        self.waits.append(timeout)
+    def read_chunk(self, timeout_s: float) -> bytes:
+        self.waits.append(timeout_s)
         if self.error:
             raise self.error
         if self.chunks:
@@ -81,7 +81,7 @@ def connect_stub(ctx: Context, transport: ChunkTransport) -> Connection:
         "stub",
         "stub://",
         transport,
-        TransportOptions(timeout=0.1),
+        TransportOptions(timeout_s=0.1),
         registry=ctx.registry.extension(DeviceRegistry),
     )
     ctx.connections["stub"] = connection
@@ -216,10 +216,10 @@ def test_line_uses_one_overall_read_deadline(monkeypatch: pytest.MonkeyPatch) ->
         return elapsed
 
     class TimedTransport(ChunkTransport):
-        def read_chunk(self, timeout: float) -> bytes:
+        def read_chunk(self, timeout_s: float) -> bytes:
             nonlocal elapsed
-            elapsed += min(timeout, 0.4)
-            return super().read_chunk(timeout)
+            elapsed += min(timeout_s, 0.4)
+            return super().read_chunk(timeout_s)
 
     monkeypatch.setattr(line_protocol, "monotonic", clock)
     transport = TimedTransport(b"a", b"b", b"c")
@@ -308,11 +308,11 @@ def test_request_owns_connection_until_response_finishes(ctx: Context) -> None:
     reading, release = Event(), Event()
 
     class BlockingTransport(ChunkTransport):
-        def read_chunk(self, timeout: float) -> bytes:
+        def read_chunk(self, timeout_s: float) -> bytes:
             reading.set()
             if not release.wait(2):
                 raise OSError("test reader was not released")
-            return super().read_chunk(timeout)
+            return super().read_chunk(timeout_s)
 
     transport = BlockingTransport(b"reply\n")
     connection = connect_stub(ctx, transport)

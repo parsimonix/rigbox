@@ -2,8 +2,8 @@
 
 ProtocolSessions exist independently of the transport itself, and multiple protocol sessions can share the same transport.
 
-Factories create one session at a time for a connection. Sessions retain incomplete input and implement message boundaries and request completion;
-they neither open nor close the underlying channel.
+Factories create one session at a time for a connection. Sessions retain incomplete input and implement message boundaries;
+they neither open nor close the underlying channel. ContinuousProtocol optionally delegates request routing to a connection-owned receiver.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Protocol, runtime_checkable
 
 
 class MessageChannel(Protocol):
-    """Interface to expose I/O from a Transport to a ProtocolSession while the Connection holds its exclusive access lock."""
+    """Expose byte I/O during serialized parsing, through a transport or a receiver's buffered input."""
 
     def write(self, data: bytes) -> None:
         """Write all bytes or raise an I/O error.
@@ -83,7 +83,7 @@ class ProtocolSession(Protocol):
         """Receive one message within one overall deadline, retaining unfinished or extra input.
 
         Args:
-            channel (MessageChannel): Exclusively held connection I/O.
+            channel (MessageChannel): Exclusively held input; continuous receivers supply buffered chunks.
             timeout_s (float): Maximum wait in seconds; zero polls.
 
         Returns:
@@ -125,6 +125,40 @@ class ProtocolSession(Protocol):
 
 ProtocolFactory = Callable[[str], ProtocolSession]
 """Create a session for a transport scheme, rejecting unsupported combinations with CommandError."""
+
+
+@dataclass(frozen=True)
+class RequestPlan:
+    """Describe a validated request for a connection-owned continuous receiver."""
+
+    wire_data: bytes
+    matches: Callable[[Message], bool]
+    discard: Callable[[Message], bool]
+
+
+@runtime_checkable
+class ContinuousProtocol(Protocol):
+    """Opt into continuous reception with protocol-specific response routing."""
+
+    def prepare_request(
+        self,
+        payload: bytes,
+        *,
+        options: Mapping[str, str] | None = None,
+    ) -> RequestPlan:
+        """Validate and frame a request without performing I/O.
+
+        Args:
+            payload: Application request bytes.
+            options: Protocol-specific request fields and discard rules.
+
+        Returns:
+            Wire bytes and predicates for matching responses and filtering unsolicited messages.
+
+        Raises:
+            CommandError: If request fields are invalid.
+        """
+        ...
 
 
 @runtime_checkable

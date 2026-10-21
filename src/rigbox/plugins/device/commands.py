@@ -19,6 +19,7 @@ from serial.tools import list_ports
 
 from rigbox.core.cli_parser import path_field
 from rigbox.core.registry import CommandError, NoArgs, Registry
+from rigbox.core.render import RigboxCmdResult
 from rigbox.hooks import hookimpl
 from rigbox.plugins.device.connection import Connection
 from rigbox.plugins.device.protocol import Message
@@ -238,11 +239,13 @@ def _message_result(
     codec: Codec | None,
     message: Message | None,
     payload_format: Literal["hex", "ascii", "utf8"] = "hex",
-) -> dict[str, Any]:
+) -> RigboxCmdResult:
     if codec is not None:
+        text = None
         result = codec.decode(data)
     elif payload_format == "hex":
-        result = {"size": len(data), "hex": data.hex()}
+        text = data.hex()
+        result = {"size": len(data), "hex": text}
     elif payload_format == "ascii":
         text = "".join("\\\\" if value == 0x5C else chr(value) if 0x20 <= value <= 0x7E else f"\\x{value:02x}" for value in data)
         result = {"size": len(data), "text": text}
@@ -254,8 +257,11 @@ def _message_result(
         result = {"size": len(data), "text": text}
     if message is not None and message.metadata:
         # An envelope keeps protocol fields distinct from arbitrary manifest field names.
-        return {"metadata": dict(message.metadata), "payload": result}
-    return result
+        return RigboxCmdResult(text=text, structured_data={"metadata": dict(message.metadata), "payload": result})
+    return RigboxCmdResult(
+        text=text,
+        structured_data=result,
+    )
 
 
 @hookimpl
@@ -311,7 +317,7 @@ def rigbox_register(registry: Registry) -> None:
             timeout_s=args.timeout,
             baud=args.baud,
             params=_parse_params(args.param),
-            write_timeout=args.write_timeout,
+            write_timeout_s=args.write_timeout,
         )
         devices = ctx.registry.extension(DeviceRegistry)
         transport = devices.open_transport(args.url, options)
@@ -334,6 +340,7 @@ def rigbox_register(registry: Registry) -> None:
                 "url": c.url,
                 "transport": c.scheme,
                 "timeout": c.timeout_s,
+                "receive": c.receive_stats(),
             }
             for c in ctx.connections.values()
             if isinstance(c, Connection)
@@ -367,7 +374,7 @@ def rigbox_register(registry: Registry) -> None:
         return result
 
     @registry.command("device.expect", args=ExpectArgs)
-    def expect(ctx: Context, args: ExpectArgs) -> dict[str, Any]:
+    def expect(ctx: Context, args: ExpectArgs) -> RigboxCmdResult:
         """Receive a raw fixed-size packet or one complete protocol message.
 
         Args:
@@ -384,20 +391,20 @@ def rigbox_register(registry: Registry) -> None:
         if args.manifest is not None and args.payload_format != "hex":
             raise CommandError("--payload-format cannot be combined with --manifest")
         codec, size = _response_packet(ctx, args.protocol, args.manifest, args.size)
-        timeout = args.timeout if args.timeout is not None else conn.timeout_s
+        timeout_s = args.timeout if args.timeout is not None else conn.timeout_s
         message: Message | None = None
         if size is not None:
-            data = conn.read_exactly(size, timeout)
+            data = conn.read_exactly(size, timeout_s)
         else:
             try:
-                message = _require_message(conn.receive_message(args.protocol, timeout), conn, args.protocol)
+                message = _require_message(conn.receive_message(args.protocol, timeout_s), conn, args.protocol)
             except EOFError:
                 raise CommandError(f"stream ended waiting for '{args.protocol}' message on '{conn.name}'") from None
             data = message.payload
         return _message_result(data, codec, message, args.payload_format)
 
     @registry.command("device.request", args=RequestArgs)
-    def request(ctx: Context, args: RequestArgs) -> dict[str, Any]:
+    def request(ctx: Context, args: RequestArgs) -> RigboxCmdResult:
         """Send one request and receive its response without interleaved connection I/O.
 
         Raw requests require --response-size or --response-manifest. A protocol defines response boundaries;
@@ -425,14 +432,14 @@ def rigbox_register(registry: Registry) -> None:
             if any("," in rule for rule in args.discard_packet):
                 raise CommandError("--discard-packet expects one TYPE[:COMMAND_ID] rule; repeat the option for more")
             options["discard_packets"] = ",".join(args.discard_packet)
-        timeout = args.timeout if args.timeout is not None else conn.timeout_s
+        timeout_s = args.timeout if args.timeout is not None else conn.timeout_s
         message: Message | None = None
         if size is not None:
-            data = conn.request(payload, size, timeout)
+            data = conn.request(payload, size, timeout_s)
         else:
             try:
                 message = _require_message(
-                    conn.request_message(payload, args.protocol, timeout, options=options),
+                    conn.request_message(payload, args.protocol, timeout_s, options=options),
                     conn,
                     args.protocol,
                 )

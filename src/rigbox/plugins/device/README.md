@@ -70,7 +70,8 @@ def rigbox_register(registry: Registry) -> None:
 Users can then connect with a URL such as `mydevice://serial-number`. `Connection` owns packet assembly, locking,
 user-facing I/O errors, and cleanup; it can also be used as a Python context manager. Keep framing and codecs out of
 transports. HID reports or BLE notifications need an explicit stream adaptation that preserves protocol identifiers
-and boundaries. Rigbox does not add background reader threads.
+and boundaries. Raw and legacy protocol operations remain synchronous. Protocols implementing
+`ContinuousProtocol.prepare_request` opt into a connection-owned continuous reader.
 
 `registry.extension(DeviceRegistry)` gets or creates one shared device registry for that command registry.
 This lets a plugin register before or after the device plugin's hook; registrations are not global and are not
@@ -154,6 +155,20 @@ metadata is present. `encode` and `request` accept keyword-only `options: Mappin
 validate these before I/O and reject unsupported fields. Existing implementations without this parameter
 still work when no options are supplied, but must adopt it to accept per-message options.
 `request` owns protocol-specific matching and completion; its response timeout starts after writing.
+For continuous reception, also implement `prepare_request(payload, *, options=None) -> RequestPlan`:
+return validated wire bytes and typed `matches(Message)` / `discard(Message)` predicates without I/O.
+The connection starts its sole reader on the first framed operation for that session. The worker calls
+`receive` against buffered input under a parser lock and routes matching responses separately from a bounded
+unsolicited queue (256 packets / 256 KiB of wire bytes, drop oldest with diagnostics/counters on overflow).
+Previously queued messages never satisfy a new request; partial input stays with the persistent parser.
+Protocol diagnostics are bounded/collected by the worker and emitted on the foreground thread.
+`device.list` exposes queue/loss counters under `receive`. Failed readers propagate explicit errors.
+Protocol switching stops/joins the worker and refuses to abandon queued/partial/failed/unresolved state.
+Closing also joins the worker; transports must honor read deadlines. No second transport reader is allowed.
+Without this optional capability, existing sessions continue using their synchronous `request` implementation.
+The workspace RACE plugin opts in; raw and built-in line behavior is unchanged.
+Replay remains synchronous/consumer-paced even for opted-in protocols, avoiding artificial queue losses
+when a finite recording is read much faster than a live device.
 Use `CommandError` for framing/user errors, propagate `OSError` for I/O failure, and use `EOFError` only for
 clean stream termination. Configurable delimiters, HID adaptation, command-spec loading and COBS/SLIP remain
 future work.
