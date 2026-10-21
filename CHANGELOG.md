@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.0.3 (2026-10-21)
+
+### Bug Fixes
+
+- Enhance the device plugin ([#2](https://github.com/parsimonix/rigbox/pull/2),
+  [`c1b6d71`](https://github.com/parsimonix/rigbox/commit/c1b6d716916b83b83448ee02ef5174da4bf05dbd))
+
+
 ## v1.0.2 (2026-10-19)
 
 
