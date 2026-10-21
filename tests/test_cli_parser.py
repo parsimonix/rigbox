@@ -143,6 +143,21 @@ def test_positional_options_flags_and_lists_become_a_raw_dict_of_what_was_given(
     assert parse_args(PARSER, ["bob"]) == {"name": "bob"}  # defaults are left to pydantic
 
 
+def test_optional_positional_accepts_intermixed_options_without_changing_defaults() -> None:
+    class FrameArgs(BaseModel):
+        name: str
+        protocol: str = "raw"
+        frame: str | None = Field(None, json_schema_extra={"positional": True})
+
+    parser = build_parser("request", FrameArgs, "Send a request.")
+    assert parse_args(parser, ["dut", "--protocol", "race", "05 5a"]) == {
+        "name": "dut",
+        "protocol": "race",
+        "frame": "05 5a",
+    }
+    assert parse_args(parser, ["dut"]) == {"name": "dut"}
+
+
 def test_negative_numbers_and_values_with_spaces_are_values_not_options() -> None:
     assert parse_args(PARSER, ["bob", "--count", "-3", "--where", "C:\\a b\\x.yaml"]) == {
         "name": "bob",

@@ -1,4 +1,7 @@
-"""Replay transport: play a `device.capture` file back as if a device were sending it."""
+"""Replay received hex bytes from NDJSON captures in file order, without reproducing recorded timing.
+
+Read records on demand and retain writes in memory; playback does not simulate responses to those writes.
+"""
 
 from __future__ import annotations
 
@@ -7,17 +10,20 @@ from collections import deque
 from pathlib import Path
 
 from rigbox.core.registry import CommandError
-from rigbox.core.transport import Transport, TransportOptions
+from rigbox.plugins.device.transport import Transport, TransportOptions
 
 
 class ReplayTransport:
-    """Serves the received bytes recorded in a capture file; writes are kept in `written` and otherwise ignored."""
+    """Transport that replays received bytes recorded into a capture file; writes are kept in `written` and otherwise ignored."""
 
     def __init__(self, path: Path) -> None:
         """Load the received (``dir: rx``) records of the NDJSON capture at `path`.
 
+        Args:
+            path (Path): The path to the capture file.
+
         Raises:
-            CommandError: If the file cannot be read or is not a capture.
+            CommandError: If the capture file cannot be read.
         """
         chunks: list[bytes] = []
         try:
@@ -32,14 +38,25 @@ class ReplayTransport:
         self.written: list[bytes] = []
 
     def write(self, data: bytes) -> None:
-        """Remember `data`; a recording cannot respond to it."""
+        """Write `data` to an internal buffer; a replay recording cannot respond to it.
+
+        Args:
+            data (bytes): The data to write.
+        """
         self.written.append(data)
 
-    def read(self, size: int, timeout: float) -> bytes:
-        """Return up to `size` of the remaining recorded bytes at once, ignoring `timeout`.
+    def read(self, size: int, timeout_s: float) -> bytes:
+        """Return up to `size` of the remaining recorded bytes at once, ignoring `timeout_s`.
+
+        Args:
+            size (int): The number of bytes to read.
+            timeout_s (float): The read timeout in seconds (ignored).
 
         Raises:
-            EOFError: If the recording is exhausted.
+            EOFError: If no more data is available.
+
+        Returns:
+            bytes: The data read.
         """
         if not self._chunks:
             raise EOFError("end of capture")
@@ -54,11 +71,17 @@ class ReplayTransport:
                 self._chunks.popleft()
         return bytes(out)
 
-    def read_chunk(self, timeout: float) -> bytes:
-        """Return the next recorded packet as it was captured, ignoring `timeout`.
+    def read_chunk(self, timeout_s: float) -> bytes:
+        """Return the next recorded packet as it was captured, ignoring `timeout_s`.
+
+        Args:
+            timeout_s (float): The maximum time to wait for the next packet (ignored).
 
         Raises:
             EOFError: If the recording is exhausted.
+
+        Returns:
+            bytes: The next recorded packet.
         """
         if not self._chunks:
             raise EOFError("end of capture")
@@ -70,7 +93,18 @@ class ReplayTransport:
 
 
 def open_replay(url: str, options: TransportOptions) -> Transport:
-    """Play back a capture file: replay://path/to/capture.ndjson."""
+    """Replay captured RX bytes from NDJSON (replay://path); no timing replay or responses to writes.
+
+    Args:
+        url (str): The replay URL.
+        options (TransportOptions): The transport options.
+
+    Raises:
+        CommandError: If the capture file cannot be opened.
+
+    Returns:
+        Transport: The opened replay transport.
+    """
     path = Path(url.partition("://")[2])
     if not path.is_file():
         raise CommandError(f"capture file not found: {path}")

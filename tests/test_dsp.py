@@ -8,16 +8,16 @@ import numpy as np
 import pytest
 import yaml
 from pydantic import ValidationError
-
-from rigbox.cli import main
-from rigbox.core.context import Context
-from rigbox.core.plugins import load_all
-from rigbox.core.registry import CommandError, Registry
 from rigbox.plugins.dsp.analyze import level_stats, tone_stats
 from rigbox.plugins.dsp.design import apply, design, metrics
 from rigbox.plugins.dsp.export import export
 from rigbox.plugins.dsp.filterspec import FilterSpec, load_filter
 from rigbox.plugins.dsp.signals import RawSpec, Signal, from_float, read_signal, to_float, write_signal
+
+from rigbox.cli import main
+from rigbox.core.context import Context
+from rigbox.core.plugins import load_all
+from rigbox.core.registry import CommandError, Registry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -52,6 +52,7 @@ def fundamental(ctx: Context, path: Path) -> float:
 
 # --- signal files -------------------------------------------------------------------------------------------
 
+
 def test_q15_mapping_and_clipping() -> None:
     assert to_float(np.array([-32768, 0, 16384], dtype=np.int16)).tolist() == [-1.0, 0.0, 0.5]
     data, clipped = from_float(np.array([-1.0, 0.5, 1.0, 1.5]), "int16")
@@ -82,8 +83,7 @@ def test_raw_layouts_and_endianness(tmp_path: Path) -> None:
     assert np.fromfile(tmp_path / "i.raw", dtype="<i2").tolist() == [16384, -16384, 8192, -8192]
     assert np.fromfile(tmp_path / "p.raw", dtype="<i2").tolist() == [16384, 8192, -16384, -8192]
     assert np.fromfile(tmp_path / "b.raw", dtype=">i2").tolist() == [16384, -16384, 8192, -8192]
-    for name, spec in (("i", RawSpec(channels=2)), ("p", RawSpec(channels=2, layout="planar")),
-                       ("b", RawSpec(channels=2, endian="big"))):
+    for name, spec in (("i", RawSpec(channels=2)), ("p", RawSpec(channels=2, layout="planar")), ("b", RawSpec(channels=2, endian="big"))):
         assert np.allclose(read_signal(tmp_path / f"{name}.raw", fs=1000, raw=spec).samples, sig.samples)
 
 
@@ -106,6 +106,7 @@ def test_unsupported_and_missing_files(tmp_path: Path, ctx: Context) -> None:
 
 
 # --- generators and inspection ------------------------------------------------------------------------------
+
 
 def test_gen_sine_is_inspected_correctly(ctx: Context, tmp_path: Path) -> None:
     path = gen(ctx, tmp_path, freq=1000, amp=0.5)
@@ -168,6 +169,7 @@ def test_plots_are_written_when_matplotlib_is_available(ctx: Context, tmp_path: 
 
 # --- convert and resample -----------------------------------------------------------------------------------
 
+
 def test_convert_raw_to_wav_and_back(ctx: Context, tmp_path: Path) -> None:
     raw = tmp_path / "in.raw"
     np.array([1000, -1000, 2000, -2000, 3000, -3000], dtype="<i2").tofile(raw)  # 3 frames of stereo
@@ -195,9 +197,7 @@ def test_resample_keeps_the_tone_and_changes_the_rate(ctx: Context, tmp_path: Pa
     assert (row["ratio"], row["samples_out"]) == ("1/3", 16000)
     out = ctx.run("dsp.inspect", {"file": str(tmp_path / "16k.wav")})[0]
     assert out["fs"] == 16000 and abs(out["fundamental_hz"] - 1000) < 1 and abs(out["peak_dbfs"] + 6.02) < 0.2
-    up = ctx.run(
-        "dsp.resample", {"src": str(tmp_path / "16k.wav"), "dst": str(tmp_path / "44k.wav"), "fs_out": 44100}
-    )[0]
+    up = ctx.run("dsp.resample", {"src": str(tmp_path / "16k.wav"), "dst": str(tmp_path / "44k.wav"), "fs_out": 44100})[0]
     assert up["ratio"] == "441/160" and up["samples_out"] == 44100
 
 
@@ -209,20 +209,21 @@ def test_resample_rejects_fractional_rates(ctx: Context, tmp_path: Path) -> None
 
 # --- filter manifests and design ----------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"cutoff": [1000, 2000]},                       # lowpass takes one cutoff
-        {"response": "bandpass"},                       # bandpass takes two
+        {"cutoff": [1000, 2000]},  # lowpass takes one cutoff
+        {"response": "bandpass"},  # bandpass takes two
         {"response": "bandpass", "cutoff": [2000, 1000]},
-        {"cutoff": 30000},                              # above Nyquist
-        {"order": None},                                # iir needs order
-        {"taps": 11},                                   # iir must not have taps
-        {"design": "chebyshev1"},                       # needs ripple_db
-        {"design": "chebyshev2"},                       # needs stopband_db
-        {"design": "elliptic", "ripple_db": 1},         # needs stopband_db too
+        {"cutoff": 30000},  # above Nyquist
+        {"order": None},  # iir needs order
+        {"taps": 11},  # iir must not have taps
+        {"design": "chebyshev1"},  # needs ripple_db
+        {"design": "chebyshev2"},  # needs stopband_db
+        {"design": "elliptic", "ripple_db": 1},  # needs stopband_db too
         {"design": "nonsense"},
-        {"kind": "fir", "order": None},                 # fir needs taps
+        {"kind": "fir", "order": None},  # fir needs taps
         {"kind": "fir", "order": None, "taps": 10, "response": "highpass"},  # even taps
         {"kind": "fir", "order": None, "taps": 11, "window": "nope"},
         {"numeric": "q7"},
@@ -239,11 +240,16 @@ def test_example_filter_loads() -> None:
     assert (s.kind, s.design, s.numeric) == ("iir", "butterworth", "q15")
 
 
-@pytest.mark.parametrize("extra", [
-    {"design": "butterworth"}, {"design": "bessel"},
-    {"design": "chebyshev1", "ripple_db": 1}, {"design": "chebyshev2", "stopband_db": 60},
-    {"design": "elliptic", "ripple_db": 1, "stopband_db": 60},
-])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"design": "butterworth"},
+        {"design": "bessel"},
+        {"design": "chebyshev1", "ripple_db": 1},
+        {"design": "chebyshev2", "stopband_db": 60},
+        {"design": "elliptic", "ripple_db": 1, "stopband_db": 60},
+    ],
+)
 def test_every_iir_design_is_stable_and_places_its_edge_sensibly(extra: dict[str, object]) -> None:
     m = metrics(design(spec(**extra)))
     assert m["stable"] and m["dc_gain_db"] > -3 and m["nyquist_gain_db"] < -30 and len(m["corners_3db_hz"]) == 1
@@ -281,9 +287,7 @@ def test_apply_fir_to_impulse_gives_the_taps(ctx: Context, tmp_path: Path) -> No
     manifest = {"name": "F", "kind": "fir", "response": "lowpass", "fs": 8000, "cutoff": 1000, "taps": 21}
     flt.write_text(yaml.safe_dump(manifest), encoding="utf-8")
     ctx.run("dsp.gen", {"kind": "impulse", "out": str(tmp_path / "imp.npz"), "fs": 8000, "seconds": 0.01, "amp": 1.0})
-    ctx.run(
-        "dsp.filter.apply", {"filter": str(flt), "src": str(tmp_path / "imp.npz"), "dst": str(tmp_path / "out.npz")}
-    )
+    ctx.run("dsp.filter.apply", {"filter": str(flt), "src": str(tmp_path / "imp.npz"), "dst": str(tmp_path / "out.npz")})
     taps = design(load_filter(flt)).taps
     assert taps is not None
     assert np.allclose(read_signal(tmp_path / "out.npz").samples[:21, 0], taps)
@@ -295,12 +299,11 @@ def test_apply_attenuates_out_of_band_tone_and_checks_rate(ctx: Context, tmp_pat
     assert ctx.run("dsp.inspect", {"file": str(tmp_path / "o.wav")})[0]["rms_dbfs"] < -60
     ctx.run("dsp.gen", {"kind": "sine", "out": str(tmp_path / "x8.wav"), "fs": 8000})
     with pytest.raises(CommandError, match="resample first"):
-        ctx.run(
-            "dsp.filter.apply", {"filter": LOWPASS, "src": str(tmp_path / "x8.wav"), "dst": str(tmp_path / "y.wav")}
-        )
+        ctx.run("dsp.filter.apply", {"filter": LOWPASS, "src": str(tmp_path / "x8.wav"), "dst": str(tmp_path / "y.wav")})
 
 
 # --- export -------------------------------------------------------------------------------------------------
+
 
 def cmsis_biquad(
     values: Sequence[float],
@@ -325,12 +328,8 @@ def cmsis_biquad(
     return x
 
 
-@pytest.mark.parametrize(
-    "numeric,per_stage,frac,tolerance", [("float32", 5, 0, 1e-5), ("q31", 5, 31, 1e-6), ("q15", 6, 15, 0.02)]
-)
-def test_cmsis_biquad_export_reproduces_the_designed_filter(
-    numeric: str, per_stage: int, frac: int, tolerance: float
-) -> None:
+@pytest.mark.parametrize("numeric,per_stage,frac,tolerance", [("float32", 5, 0, 1e-5), ("q31", 5, 31, 1e-6), ("q15", 6, 15, 0.02)])
+def test_cmsis_biquad_export_reproduces_the_designed_filter(numeric: str, per_stage: int, frac: int, tolerance: float) -> None:
     d = design(spec(numeric=numeric, order=4))
     c = export(d, "cmsis")
     assert c.per_stage == per_stage and c.stable
@@ -384,8 +383,13 @@ def test_export_command_writes_c_json_and_csv(ctx: Context, tmp_path: Path) -> N
     row = ctx.run("dsp.filter.export", {"filter": LOWPASS, "target": "cmsis", "out": str(c_file)})[0]
     text = c_file.read_text(encoding="utf-8")
     assert row["numeric"] == "q15" and row["stable"] and row["max_response_error_db"] < 1
-    for needle in ('#include "arm_math.h"', "LOWPASS1K_NUM_STAGES 2", "LOWPASS1K_POST_SHIFT 1",
-                   "static const q15_t LOWPASS1K_COEFFS[12]", "LOWPASS1K_STATE_LEN 8"):
+    for needle in (
+        '#include "arm_math.h"',
+        "LOWPASS1K_NUM_STAGES 2",
+        "LOWPASS1K_POST_SHIFT 1",
+        "static const q15_t LOWPASS1K_COEFFS[12]",
+        "LOWPASS1K_STATE_LEN 8",
+    ):
         assert needle in text
     generic = ctx.run("dsp.filter.export", {"filter": LOWPASS, "numeric": "float32", "out": str(tmp_path / "g.h")})[0]
     assert generic["numeric"] == "float32"
@@ -407,6 +411,7 @@ def test_export_default_path_is_next_to_the_manifest(ctx: Context, tmp_path: Pat
 
 # --- estimate -----------------------------------------------------------------------------------------------
 
+
 def test_estimate_iir_and_fir(ctx: Context) -> None:
     args = {"filter": LOWPASS, "cycles_per_mac": 2, "overhead_cycles": 10, "clock_mhz": 100}
     (row,) = ctx.run("dsp.filter.estimate", args)
@@ -418,14 +423,16 @@ def test_estimate_iir_and_fir(ctx: Context) -> None:
 
 def test_estimate_without_a_clock_leaves_load_blank(tmp_path: Path, ctx: Context) -> None:
     flt = tmp_path / "fir.yaml"
-    flt.write_text(yaml.safe_dump({"name": "F", "kind": "fir", "response": "lowpass", "fs": 8000, "cutoff": 1000,
-                                   "taps": 31, "numeric": "q31"}), encoding="utf-8")
+    flt.write_text(
+        yaml.safe_dump({"name": "F", "kind": "fir", "response": "lowpass", "fs": 8000, "cutoff": 1000, "taps": 31, "numeric": "q31"}), encoding="utf-8"
+    )
     (row,) = ctx.run("dsp.filter.estimate", {"filter": str(flt)})
     assert (row["macs_per_sample"], row["coeff_bytes"], row["state_bytes"]) == (31, 124, 120)
     assert row["load_percent"] is None and row["max_sample_rate_hz"] is None
 
 
 # --- end to end through the CLI -----------------------------------------------------------------------------
+
 
 def test_cli_pipeline_gen_filter_inspect(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     wav, out = tmp_path / "n.wav", tmp_path / "f.wav"

@@ -76,7 +76,7 @@ class Context:
         Console(file=stream).print(renderable, style=style, markup=False)
 
     def run(self, name: str, raw_args: dict[str, Any] | None = None) -> RigboxCmdResult:
-        """Validate arguments, invoke the handler, and normalize its response.
+        """Validate arguments, rejecting unknown fields, then invoke the handler and normalize its response.
 
         Args:
             name (str): The name of the command to run.
@@ -90,7 +90,7 @@ class Context:
         """
         cmd = self.registry.get(name)
         try:
-            args = cmd.args_model.model_validate(raw_args or {})
+            args = cmd.args_model.model_validate(raw_args or {}, extra="forbid")
         except ValidationError as e:
             problems = "; ".join(f"{'.'.join(str(p) for p in err['loc']) or 'args'}: {err['msg']}" for err in e.errors())
             raise CommandError(f"{name}: invalid arguments: {problems}") from None

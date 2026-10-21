@@ -10,12 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from rigbox.core.context import Context
+from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry
-from rigbox.core.transport import TransportOptions
 from rigbox.plugins.device import connection as connection_module
-from rigbox.plugins.device import serial_transport as serial_module
 from rigbox.plugins.device.connection import Connection
-from rigbox.plugins.device.serial_transport import SerialTransport
+from rigbox.plugins.device.transport import TransportOptions
+from rigbox.plugins.device.transports import serial_transport as serial_module
+from rigbox.plugins.device.transports.serial_transport import SerialTransport
 
 
 class StubTransport:
@@ -38,9 +39,9 @@ class StubTransport:
             raise self.write_error
         self.written.append(data)
 
-    def read(self, size: int, timeout: float) -> bytes:
+    def read(self, size: int, timeout_s: float) -> bytes:
         """Return at most one queued chunk, respecting the requested size."""
-        self.waits.append(timeout)
+        self.waits.append(timeout_s)
         if self.read_error is not None:
             raise self.read_error
         if not self.chunks:
@@ -52,9 +53,9 @@ class StubTransport:
             self.chunks.appendleft(chunk[size:])
         return chunk[:size]
 
-    def read_chunk(self, timeout: float) -> bytes:
+    def read_chunk(self, timeout_s: float) -> bytes:
         """Return the next available chunk."""
-        return self.read(4096, timeout)
+        return self.read(4096, timeout_s)
 
     def close(self) -> None:
         """Count cleanup attempts and optionally fail."""
@@ -64,7 +65,35 @@ class StubTransport:
 
 
 def connection(transport: StubTransport) -> Connection:
-    return Connection("device", "stub://", transport, TransportOptions(timeout=0.5))
+    return Connection("device", "stub://", transport, TransportOptions(timeout_s=0.5))
+
+
+def test_timeout_command_names_map_to_transport_seconds() -> None:
+    registry = Registry()
+    load_all(registry)
+    ctx = Context(registry=registry)
+    try:
+        ctx.run_line("device.connect d loop:// --timeout 0.5 --write-timeout 0.2")
+        session = ctx.connections["d"]
+        assert isinstance(session, Connection)
+        assert session.options.timeout_s == 0.5
+        assert session.options.write_timeout_s == 0.2
+        assert ctx.run(
+            "device.request",
+            {
+                "name": "d",
+                "hex": "0102",
+                "response_size": 2,
+                "timeout": 0.1,
+            },
+        ).structured_data == {"size": 2, "hex": "0102"}
+    finally:
+        ctx.close()
+
+
+def test_transport_accepts_timeout_seconds_keyword() -> None:
+    session = connection(StubTransport((b"abc",)))
+    assert session.read(size=3, timeout_s=0.5) == b"abc"
 
 
 def test_session_collects_partial_reads_into_one_fixed_size_packet() -> None:
@@ -112,14 +141,14 @@ def test_partial_reads_share_one_deadline(monkeypatch: pytest.MonkeyPatch) -> No
         return elapsed
 
     class TimedTransport(StubTransport):
-        def read(self, size: int, timeout: float) -> bytes:
+        def read(self, size: int, timeout_s: float) -> bytes:
             nonlocal elapsed
-            if timeout < 0.4:
-                self.waits.append(timeout)
-                elapsed += timeout
+            if timeout_s < 0.4:
+                self.waits.append(timeout_s)
+                elapsed += timeout_s
                 return b""
             elapsed += 0.4
-            return super().read(size, timeout)
+            return super().read(size, timeout_s)
 
     monkeypatch.setattr(connection_module, "monotonic", clock)
     transport = TimedTransport((b"a", b"b", b"c"))
@@ -134,11 +163,11 @@ def test_zero_timeout_polls_without_waiting() -> None:
     assert transport.waits == [0]
 
 
-@pytest.mark.parametrize("timeout", [-1.0, float("nan"), float("inf")])
-def test_invalid_timeouts_are_rejected_before_io(timeout: float) -> None:
+@pytest.mark.parametrize("timeout_s", [-1.0, float("nan"), float("inf")])
+def test_invalid_timeouts_are_rejected_before_io(timeout_s: float) -> None:
     transport = StubTransport((b"a",))
     with pytest.raises(ValueError, match="timeout"):
-        connection(transport).request(b"query", 1, timeout)
+        connection(transport).request(b"query", 1, timeout_s)
     assert transport.written == []
 
 
@@ -155,11 +184,11 @@ def test_request_holds_the_session_lock_through_reading() -> None:
     release = Event()
 
     class BlockingTransport(StubTransport):
-        def read(self, size: int, timeout: float) -> bytes:
+        def read(self, size: int, timeout_s: float) -> bytes:
             reading.set()
             if not release.wait(2):
                 raise OSError("test did not release reader")
-            return super().read(size, timeout)
+            return super().read(size, timeout_s)
 
     transport = BlockingTransport((b"reply",))
     session = connection(transport)
@@ -224,14 +253,16 @@ def test_context_manager_closes_and_preserves_the_original_error() -> None:
 
 
 def test_loopback_request_and_context_managed_cleanup() -> None:
-    options = TransportOptions(timeout=0.1)
+    options = TransportOptions(timeout_s=0.1)
     transport = SerialTransport("loop://", options)
     with Connection("loop", "loop://", transport, options) as session:
         assert session.request(b"hello", 5, 0.1) == b"hello"
     assert not transport._port.is_open
 
 
-def test_serial_handles_partial_writes_without_flushing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serial_handles_partial_writes_without_flushing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     written = bytearray()
     settings: dict[str, object] = {}
 
@@ -252,7 +283,7 @@ def test_serial_handles_partial_writes_without_flushing(monkeypatch: pytest.Monk
         return port
 
     monkeypatch.setattr(serial_module.serial, "serial_for_url", open_port)
-    SerialTransport("serial://COM3", TransportOptions(timeout=0.5, write_timeout=0.2)).write(b"abc")
+    SerialTransport("serial://COM3", TransportOptions(timeout_s=0.5, write_timeout_s=0.2)).write(b"abc")
     assert written == b"abc"
     assert settings["write_timeout"] == 0.2
     assert 0 < port.write_timeout <= 0.2
@@ -260,10 +291,12 @@ def test_serial_handles_partial_writes_without_flushing(monkeypatch: pytest.Monk
 
 def test_rfc2217_rejects_an_explicit_unsupported_write_timeout() -> None:
     with pytest.raises(CommandError, match="RFC2217.*does not support --write-timeout"):
-        SerialTransport("rfc2217://unused:1234", TransportOptions(write_timeout=0.5))
+        SerialTransport("rfc2217://unused:1234", TransportOptions(write_timeout_s=0.5))
 
 
-def test_context_cleanup_attempts_every_resource_and_reports_failures(capsys: pytest.CaptureFixture[str]) -> None:
+def test_context_cleanup_attempts_every_resource_and_reports_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     bad = StubTransport()
     bad.close_error = OSError("cleanup failed")
     good = StubTransport()
@@ -289,13 +322,15 @@ def test_serial_rejects_writes_that_make_no_progress(progress: int | None, monke
         return StalledPort()
 
     monkeypatch.setattr(serial_module.serial, "serial_for_url", open_port)
-    options = TransportOptions(timeout=0.1)
+    options = TransportOptions(timeout_s=0.1)
     session = Connection("serial", "COM3", SerialTransport("COM3", options), options)
     with pytest.raises(CommandError, match="cannot write.*no progress"):
         session.write(b"abc")
 
 
-def test_serial_partial_writes_share_one_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serial_partial_writes_share_one_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     elapsed = 0.0
     waits: list[float] = []
 
@@ -316,14 +351,16 @@ def test_serial_partial_writes_share_one_deadline(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(serial_module, "time", SimpleNamespace(monotonic=clock))
     monkeypatch.setattr(serial_module.serial, "serial_for_url", open_port)
-    options = TransportOptions(timeout=0.5)
+    options = TransportOptions(timeout_s=0.5)
     session = Connection("serial", "COM3", SerialTransport("COM3", options), options)
     with pytest.raises(CommandError, match="write timeout after 2 of 3 bytes"):
         session.write(b"abc")
     assert waits == pytest.approx([0.5, 0.2])
 
 
-def test_serial_raw_chunks_are_bounded_and_only_wait_for_the_first_byte(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serial_raw_chunks_are_bounded_and_only_wait_for_the_first_byte(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reads: list[tuple[int, float]] = []
 
     class BufferedPort:

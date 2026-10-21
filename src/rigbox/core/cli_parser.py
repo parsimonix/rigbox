@@ -5,7 +5,7 @@ Rigbox defines all commands using pydantic models to represent their arguments.
 This module provides functions to convert these pydantic models into argparse parsers,
 so that commands can be run both from the command line and the interactive shell with consistent argument handling.
 
-Required fields in the pydantic model become positional arguments, while optional fields become named options with `--`.
+Required fields become positional arguments; optional fields become named options with `--` unless marked positional.
 Boolean fields become bare flags, list fields can repeat, and Literal fields become validated choices.
 
 Values stay as strings when parsed from the command line, and pydantic handles conversion and validation when the command runs.
@@ -17,14 +17,17 @@ import argparse
 import functools
 import shlex
 import typing
+from collections.abc import Iterable
 from types import UnionType
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar, overload
 
 import cmd2
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 
 from rigbox.core.registry import Command, UsageError
+
+_NamespaceT = TypeVar("_NamespaceT", bound=argparse.Namespace)
 
 
 def path_field(default: Any = ..., **kwargs: Any) -> Any:  # noqa: ANN401 - mirrors pydantic's Field()
@@ -46,6 +49,31 @@ class RigboxParser(cmd2.Cmd2ArgumentParser):
     """Names of the args model's fields, used to pick them out of the parsed namespace."""
 
     error_message: str = ""
+    intermixed: bool = False
+
+    @overload
+    def parse_args(self, args: Iterable[str] | None = None, namespace: None = None) -> argparse.Namespace: ...
+
+    @overload
+    def parse_args(self, args: Iterable[str] | None, namespace: _NamespaceT) -> _NamespaceT: ...
+
+    @overload
+    def parse_args(self, *, namespace: _NamespaceT) -> _NamespaceT: ...
+
+    def parse_args(self, args: Iterable[str] | None = None, namespace: argparse.Namespace | None = None) -> argparse.Namespace:
+        """Parse arguments, allowing options between explicitly declared optional positionals.
+
+        Args:
+            args: Command tokens, or process arguments when omitted.
+            namespace: Existing namespace to populate.
+
+        Returns:
+            Parsed command arguments.
+        """
+        target = namespace if namespace is not None else argparse.Namespace()
+        if self.intermixed:
+            return self.parse_intermixed_args(args, target)
+        return super().parse_args(args, target)
 
     def error(self, message: str) -> NoReturn:
         """Record `message`, then let argparse print the usage and exit as usual."""
@@ -98,6 +126,12 @@ def build_parser(name: str, model: type[BaseModel], summary: str) -> RigboxParse
         # Automatically set up path completion for path fields
         if _is_path(info):
             options["completer"] = cmd2.Cmd.path_complete
+        extra = info.json_schema_extra
+        positional = isinstance(extra, dict) and extra.get("positional") is True
+        if positional and not info.is_required():
+            parser.intermixed = True
+            parser.add_argument(field, nargs="?", default=argparse.SUPPRESS, **options)
+            continue
         if info.is_required():
             parser.add_argument(field, **options)
             continue

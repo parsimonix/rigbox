@@ -237,5 +237,12 @@ class MachineSpec(BaseModel):
 
 
 def to_mermaid(spec: MachineSpec) -> str:
-    return
+    """Render the the given `spec` as mermaid text.
+
+    Args:
+        spec (MachineSpec): The machine specification to render.
+
+    Returns:
+        str: The mermaid source.
+    """
     return MachineSpec.to_mermaid(spec)
