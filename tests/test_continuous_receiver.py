@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from collections import deque
 from collections.abc import Iterator
@@ -11,7 +12,10 @@ from threading import Condition, Event, Lock, get_ident
 from time import monotonic
 
 import pytest
+from typer.testing import CliRunner
 
+from rigbox import cli as cli_module
+from rigbox.constants import RenderFormat
 from rigbox.core.context import Context
 from rigbox.core.plugins import load_all
 from rigbox.core.registry import CommandError, Registry
@@ -22,6 +26,7 @@ from rigbox.plugins.device.receiver import MessageReceiver
 from rigbox.plugins.device.registry import DeviceRegistry
 from rigbox.plugins.device.transport import TransportOptions
 from rigbox.plugins.device.transports.replay_transport import ReplayTransport
+from rigbox.repl import build_shell
 
 
 def frame(payload: bytes = b"", *, packet_type: int = 0x5B, command_id: int = 0x0301) -> bytes:
@@ -149,6 +154,52 @@ def test_response_bypasses_overflowing_unsolicited_queue(
     }
     assert any("overflow dropped 344 oldest packets" in text for text in logs)
     assert len(transport.written) == 1
+
+
+def test_plain_escape_advisory_reaches_foreground_once(
+    device: tuple[Connection, LiveTransport, list[str]],
+) -> None:
+    connection, transport, logs = device
+    transport.on_write = frame(b"\x77\xee")
+    response = connection.request_message(b"", "race", 1, options={"command_id": "0x0301"})
+    assert response is not None and response.payload == b"\x77\xee"
+    assert len(logs) == 1 and "Possible Airoha UART escaping" in logs[0]
+    connection.receive_stats()
+    transport.on_write = frame(b"\x77\xec")
+    assert connection.request_message(b"", "race", 1, options={"command_id": "0x0301"}) is not None
+    assert len(logs) == 1
+
+
+def test_active_framing_failure_is_not_also_logged(
+    device: tuple[Connection, LiveTransport, list[str]],
+) -> None:
+    connection, transport, logs = device
+    transport.on_write = bytes.fromhex("05 5d 03 00 01 03 77 ee")
+    with pytest.raises(CommandError, match="continuous reception failed") as caught:
+        connection.request_message(b"", "race", 1, options={"command_id": "0x0301"})
+    text = str(caught.value)
+    assert text.count("close and reconnect") == 1
+    assert text.count("--protocol race-uart") == 1
+    assert logs == []
+    connection.receive_stats()
+    assert logs == []
+
+
+def test_idle_framing_failure_is_logged_once_when_listing(
+    device: tuple[Connection, LiveTransport, list[str]],
+) -> None:
+    connection, transport, logs = device
+    connection.send_message(b"", "race", options={"command_id": "1", "packet_type": "0x5c"})
+    transport.feed(bytes.fromhex("05 5d 03 00 01 03 77 ee"))
+    deadline = monotonic() + 1
+    while not logs and monotonic() < deadline:
+        connection.receive_stats()
+        Event().wait(0.005)
+    assert len(logs) == 1
+    assert logs[0].count("close and reconnect") == 1
+    assert "--protocol race-uart" in logs[0]
+    connection.receive_stats()
+    assert len(logs) == 1
 
 
 def test_persistent_parser_finishes_old_fragment_without_blocking_request(
@@ -451,3 +502,133 @@ def test_replay_remains_consumer_paced_without_live_queue_losses(tmp_path: Path)
             connection.receive_message("race", 1)
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize("entry", ["line", "tokens", "shell", "cli", "mapping"])
+def test_complete_frame_request_interfaces(
+    device: tuple[Connection, LiveTransport, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    connection, transport, _ = device
+    registry = Registry()
+    load_all(registry)
+    ctx = Context(registry=registry)
+    ctx.connections["dut"] = connection
+    transport.on_write = frame(b"SDK")
+    tokens = [
+        "device.request",
+        "dut",
+        "--protocol",
+        "race-uart",
+        "05 5A 02 00 01 03",
+        "--timeout",
+        "1",
+        "--payload-format",
+        "ascii",
+    ]
+    try:
+        if entry == "shell":
+            output = io.StringIO()
+            shell = build_shell(ctx, stdout=output)
+            type(shell).format = RenderFormat.JSON
+            shell.onecmd_plus_hooks('device.request dut --protocol race-uart "05 5A 02 00 01 03" --timeout 1 --payload-format ascii')
+            result = json.loads(output.getvalue())[0]
+        elif entry == "cli":
+
+            def build_context(workspace: str | None, fmt: RenderFormat) -> Context:
+                ctx.fmt = fmt
+                return ctx
+
+            monkeypatch.setattr(cli_module, "_build_context", build_context)
+            invocation = CliRunner().invoke(cli_module.cli, ["run", "--format", "json", *tokens])
+            assert invocation.exit_code == 0, invocation.output
+            result = json.loads(invocation.output)[0]
+        elif entry == "mapping":
+            result = ctx.run(
+                "device.request",
+                {
+                    "name": "dut",
+                    "protocol": "race-uart",
+                    "frame": "05 5A 02 00 01 03",
+                    "timeout": 1,
+                    "payload_format": "ascii",
+                },
+            ).structured_data
+        elif entry == "tokens":
+            result = ctx.run_tokens(tokens).structured_data
+        else:
+            result = ctx.run_line('device.request dut --protocol race-uart "05 5A 02 00 01 03" --timeout 1 --payload-format ascii').structured_data
+        assert result == {
+            "metadata": {"command_id": 0x0301, "packet_type": 0x5B, "length": 5},
+            "payload": {"size": 3, "text": "SDK"},
+        }
+        assert transport.written == [bytes.fromhex("05 5a 02 00 01 03")]
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize("protocol", ["race", "race-uart"])
+@pytest.mark.parametrize("continuous", [True, False])
+def test_complete_frame_uses_normal_routing_escaping_and_filters(device: tuple[Connection, LiveTransport, list[str]], protocol: str, continuous: bool) -> None:
+    connection, transport, _ = device
+    if not continuous:
+        connection.url = "replay://test"
+    request = frame(b"\x11\x13\x77", packet_type=0x5A)
+    transport.on_write = frame(b"log", packet_type=0x5D) + frame(b"other", command_id=2) + frame(b"SDK")
+    response = connection.request_message(request, protocol, 1, framed=True, options={"discard_packets": "0x5d"})
+    expected = request if protocol == "race" else request[:-3] + bytes.fromhex("77 ee 77 ec 77 88")
+    assert transport.written == [expected]
+    assert response is not None and response.payload == b"SDK"
+    retained = connection.receive_message(protocol, 0)
+    assert retained is not None and retained.payload == b"other"
+    assert connection.receive_message(protocol, 0) is None
+
+
+@pytest.mark.parametrize(
+    "wire",
+    [
+        b"",
+        bytes.fromhex("04 5a 02 00 01 03"),
+        bytes.fromhex("05 59 02 00 01 03"),
+        bytes.fromhex("05 5a 01 00 01"),
+        bytes.fromhex("05 5a 03 00 01 03"),
+        bytes.fromhex("05 5a 02 00 01 03 00"),
+        frame(packet_type=0x5C),
+        frame() * 2,
+    ],
+)
+def test_invalid_complete_frame_never_writes(device: tuple[Connection, LiveTransport, list[str]], wire: bytes) -> None:
+    connection, transport, _ = device
+    with pytest.raises(CommandError, match="RACE request frame"):
+        connection.request_message(wire, "race-uart", 1, framed=True)
+    assert not transport.written
+    assert not transport.started.is_set()
+
+
+@pytest.mark.parametrize(
+    ("suffix", "error"),
+    [
+        ('--protocol race "not hex"', "bad frame hex"),
+        ('--protocol race "05 5a 02 00 01 03" --hex ""', "do not combine"),
+        ('--protocol race "05 5a 02 00 01 03" --text x', "do not combine"),
+        ('--protocol race "05 5a 02 00 01 03" --manifest unused --values "{}"', "do not combine"),
+        ('--protocol race "05 5a 02 00 01 03" --protocol-option command_id=0x0301', "cannot be combined"),
+        ('--protocol race "05 5a 02 00 01 03" --protocol-option packet_type=0x5a', "cannot be combined"),
+        ('--protocol race "05 5a 02 00 01 03" --protocol-option unknown=1', "invalid RACE message"),
+        ('--protocol line "05 5a 02 00 01 03"', "does not support complete"),
+        ('"05 5a 02 00 01 03" --response-size 1', "complete frames require"),
+    ],
+)
+def test_complete_frame_rejects_conflicting_or_unsupported_inputs(device: tuple[Connection, LiveTransport, list[str]], suffix: str, error: str) -> None:
+    connection, transport, _ = device
+    registry = Registry()
+    load_all(registry)
+    ctx = Context(registry=registry)
+    ctx.connections["dut"] = connection
+    try:
+        with pytest.raises(CommandError, match=error):
+            ctx.run_line(f"device.request dut {suffix}")
+        assert not transport.written
+    finally:
+        ctx.close()

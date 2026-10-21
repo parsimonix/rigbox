@@ -127,6 +127,26 @@ ProtocolFactory = Callable[[str], ProtocolSession]
 """Create a session for a transport scheme, rejecting unsupported combinations with CommandError."""
 
 
+@runtime_checkable
+class FramedRequestProtocol(Protocol):
+    """Accept complete, unescaped request frames instead of application payloads."""
+
+    def decode_request_frame(self, frame: bytes, *, options: Mapping[str, str] | None = None) -> tuple[bytes, Mapping[str, str]]:
+        """Validate one complete frame and extract inputs for the normal request path.
+
+        Args:
+            frame: Complete protocol bytes before transport-specific escaping.
+            options: Additional request options; conflicting frame fields must be rejected.
+
+        Returns:
+            Application payload and protocol options used to frame and match the request.
+
+        Raises:
+            CommandError: If the frame or its options are invalid.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class RequestPlan:
     """Describe a validated request for a connection-owned continuous receiver."""

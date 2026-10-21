@@ -123,6 +123,11 @@ class ExpectArgs(ProtocolArgs):
 class RequestArgs(SendArgs):
     """Arguments for `device.request`."""
 
+    frame: str | None = Field(
+        None,
+        description="Complete protocol frame as hex, before UART escaping; alternative to payload options",
+        json_schema_extra={"positional": True},
+    )
     response_manifest: str | None = path_field(None, description="Decode response payload; also sets response size in raw mode")
     response_size: int | None = Field(
         None,
@@ -294,11 +299,29 @@ def rigbox_register(registry: Registry) -> None:
 
     @registry.command("device.transports", record=False)
     def transports(ctx: Context, args: NoArgs) -> list[dict[str, str]]:
-        """List the transports (URL schemes) that device.connect understands."""
+        """List available transport URL schemes and how they move bytes.
+
+        Args:
+            ctx: Current command context.
+            args: Unused command arguments.
+
+        Returns:
+            Transport schemes and descriptions of their communication mechanisms.
+        """
+        serial_descriptions = {
+            "serial": "Local serial port via pyserial (COM3 or serial://COM3); --baud sets the line speed.",
+            "loop": "In-memory loopback via pyserial (loop://); written bytes become readable without hardware.",
+            "socket": "Raw TCP byte stream via pyserial (socket://host:port); no remote serial-port configuration.",
+            "rfc2217": "Remote serial port via pyserial (rfc2217://host:port); Telnet/RFC2217 carries data and port settings.",
+        }
         return [
             {
                 "scheme": scheme,
-                "description": ((factory.__doc__ or "").strip().splitlines() or [""])[0],
+                "description": (
+                    serial_descriptions[scheme]
+                    if factory is open_serial and scheme in serial_descriptions
+                    else ((factory.__doc__ or "").strip().splitlines() or [""])[0]
+                ),
             }
             for scheme, factory in sorted(ctx.registry.extension(DeviceRegistry).transports.items())
         ]
@@ -408,7 +431,8 @@ def rigbox_register(registry: Registry) -> None:
         """Send one request and receive its response without interleaved connection I/O.
 
         Raw requests require --response-size or --response-manifest. A protocol defines response boundaries;
-        line returns the next line, not a correlated reply. Input is retained and writes are never retried.
+        line returns the next line, not a correlated reply. An optional positional hex frame is validated by the
+        protocol instead of constructing a frame from payload options. Input is retained and writes are never retried.
 
         Args:
             ctx: Current command context.
@@ -424,7 +448,17 @@ def rigbox_register(registry: Registry) -> None:
         if args.response_manifest is not None and args.payload_format != "hex":
             raise CommandError("--payload-format cannot be combined with --response-manifest")
         codec, size = _response_packet(ctx, args.protocol, args.response_manifest, args.response_size)
-        payload = _encode(ctx, args)
+        if args.frame is not None:
+            if any(value is not None for value in (args.hex, args.text, args.manifest, args.values)):
+                raise CommandError("do not combine a complete frame with --hex, --text, --manifest or --values")
+            if args.protocol == "raw":
+                raise CommandError("complete frames require a supporting protocol; use --hex for raw requests")
+            try:
+                payload = bytes.fromhex(args.frame)
+            except ValueError as error:
+                raise CommandError(f"bad frame hex: {error}") from None
+        else:
+            payload = _encode(ctx, args)
         options = _message_options(args)
         if args.discard_packet:
             if "discard_packets" in options:
@@ -439,7 +473,7 @@ def rigbox_register(registry: Registry) -> None:
         else:
             try:
                 message = _require_message(
-                    conn.request_message(payload, args.protocol, timeout_s, options=options),
+                    conn.request_message(payload, args.protocol, timeout_s, options=options, framed=args.frame is not None),
                     conn,
                     args.protocol,
                 )

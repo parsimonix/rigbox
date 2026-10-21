@@ -79,9 +79,16 @@ def test_scheme_of() -> None:
 
 
 def test_builtin_transports_are_listed_with_descriptions(ctx: Context) -> None:
-    rows = {r["scheme"]: r["description"] for r in ctx.run("device.transports")}
+    result = ctx.run("device.transports").structured_data
+    assert isinstance(result, list)
+    rows = {r["scheme"]: r["description"] for r in result}
     assert set(rows) == {"serial", "loop", "socket", "rfc2217", "replay"}
-    assert "loop://" in rows["loop"] and "replay://" in rows["replay"]
+    assert len(set(rows.values())) == 5
+    assert "Local serial port via pyserial" in rows["serial"]
+    assert "In-memory loopback" in rows["loop"] and "loop://" in rows["loop"]
+    assert "Raw TCP" in rows["socket"] and "no remote serial-port configuration" in rows["socket"]
+    assert "Telnet/RFC2217" in rows["rfc2217"] and "port settings" in rows["rfc2217"]
+    assert "replay://" in rows["replay"] and "no timing replay or responses to writes" in rows["replay"]
 
 
 def test_registry_rejects_duplicate_and_unknown_schemes(ctx: Context) -> None:

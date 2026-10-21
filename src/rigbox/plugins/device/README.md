@@ -8,10 +8,11 @@ Connections use a URL to choose a **transport**:
 
 | URL | Transport |
 |---|---|
-| `COM3`, `/dev/ttyUSB0`, `serial://COM3` | Serial port (`--baud` sets the speed) |
-| `loop://` | Loopback port that echoes sent data |
-| `socket://host:port`, `rfc2217://host:port` | Serial over TCP |
-| `replay://captures\run1.ndjson` | Replays incoming data from a `device.capture` file; writes are ignored |
+| `COM3`, `/dev/ttyUSB0`, `serial://COM3` | Local serial port opened by pyserial; `--baud` sets the line speed |
+| `loop://` | Pyserial's in-memory loopback: written bytes become readable without hardware |
+| `socket://host:port` | Pyserial's raw TCP byte stream; does not configure a remote serial port |
+| `rfc2217://host:port` | Pyserial's remote serial port over Telnet/RFC2217; carries data and serial settings to a compatible server |
+| `replay://captures\run1.ndjson` | Reads recorded RX hex bytes from NDJSON in file order, on demand, without recorded timing; writes are retained in memory but do not generate responses |
 
 ## What is a transport?
 
@@ -99,6 +100,14 @@ framing. Expect/request results describe the **payload**, without framing, as si
 With a non-raw protocol, omit `--size`/`--response-size`; the protocol determines the boundary. A receive manifest
 decodes and validates the framed payload rather than controlling how many bytes to read.
 
+`device.request` also accepts one quoted positional hex frame when the selected protocol supports it.
+For example, the workspace RACE plugin accepts
+`device.request dut --protocol race-uart "05 5A 02 00 01 03" --timeout 3 --payload-format ascii`.
+Supply a complete **unescaped** frame; the protocol validates it, derives response matching, and applies any
+UART escaping. Do not combine it with `--hex`, `--text`, or `--manifest`/`--values`.
+`--hex` continues to mean payload bytes, never an automatically detected frame. Raw requests use `--hex`;
+protocols without complete-frame support fail explicitly.
+
 The built-in `line` protocol adds LF on send and removes it from received payloads. Supply one payload without LF;
 embedded LF is rejected. CR is preserved, so CRLF peers produce payloads ending in CR. Empty lines are messages,
 not timeouts. The session retains partial messages after timeouts and additional lines from coalesced reads.
@@ -155,6 +164,11 @@ metadata is present. `encode` and `request` accept keyword-only `options: Mappin
 validate these before I/O and reject unsupported fields. Existing implementations without this parameter
 still work when no options are supplied, but must adopt it to accept per-message options.
 `request` owns protocol-specific matching and completion; its response timeout starts after writing.
+To accept positional complete request frames, optionally implement
+`decode_request_frame(frame, *, options=None) -> tuple[bytes, Mapping[str, str]]`
+(`FramedRequestProtocol`). Validate exactly one unescaped frame and return its payload and derived request
+options; reject conflicts with fields supplied in the frame. Connection then uses the normal synchronous or
+continuous request path, preserving response routing, deadlines, and transport-specific escaping.
 For continuous reception, also implement `prepare_request(payload, *, options=None) -> RequestPlan`:
 return validated wire bytes and typed `matches(Message)` / `discard(Message)` predicates without I/O.
 The connection starts its sole reader on the first framed operation for that session. The worker calls
@@ -163,6 +177,8 @@ unsolicited queue (256 packets / 256 KiB of wire bytes, drop oldest with diagnos
 Previously queued messages never satisfy a new request; partial input stays with the persistent parser.
 Protocol diagnostics are bounded/collected by the worker and emitted on the foreground thread.
 `device.list` exposes queue/loss counters under `receive`. Failed readers propagate explicit errors.
+Failures raised to a foreground operation are not also logged as diagnostics; unreported idle failures are
+reported once by the next diagnostic drain (such as list/close).
 Protocol switching stops/joins the worker and refuses to abandon queued/partial/failed/unresolved state.
 Closing also joins the worker; transports must honor read deadlines. No second transport reader is allowed.
 Without this optional capability, existing sessions continue using their synchronous `request` implementation.

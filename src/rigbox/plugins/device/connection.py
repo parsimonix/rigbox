@@ -16,7 +16,13 @@ from typing import Self
 from warnings import warn
 
 from rigbox.core.registry import CommandError
-from rigbox.plugins.device.protocol import ContinuousProtocol, Message, ProtocolDiagnostics, ProtocolSession
+from rigbox.plugins.device.protocol import (
+    ContinuousProtocol,
+    FramedRequestProtocol,
+    Message,
+    ProtocolDiagnostics,
+    ProtocolSession,
+)
 from rigbox.plugins.device.receiver import MessageReceiver
 from rigbox.plugins.device.registry import DeviceRegistry
 from rigbox.plugins.device.transport import Transport, TransportOptions, scheme_of
@@ -285,14 +291,16 @@ class Connection:
         timeout_s: float,
         *,
         options: Mapping[str, str] | None = None,
+        framed: bool = False,
     ) -> Message | None:
         """Serialize a complete protocol request and response without automatic retries.
 
         Args:
-            payload (bytes): The request payload.
+            payload (bytes): The request payload, or a complete unescaped frame when framed is True.
             protocol (str): The protocol identifier.
             timeout_s (float): Response timeout in seconds.
             options (Mapping[str, str] | None, optional): Protocol-specific per-message fields. Defaults to None.
+            framed (bool): Validate a complete frame and derive request fields through the protocol.
 
         Raises:
             CommandError: If protocol selection, framing or communication fails.
@@ -304,6 +312,10 @@ class Connection:
         with self._access(timeout_s):
             self._ensure_open()
             session = self._message_session(protocol)
+            if framed:
+                if not isinstance(session, FramedRequestProtocol):
+                    raise CommandError(f"protocol '{protocol}' does not support complete request frames")
+                payload, options = session.decode_request_frame(payload, options=options)
             self._start_receiver(session)
             try:
                 if self._receiver is not None:

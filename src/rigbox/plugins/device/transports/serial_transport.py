@@ -1,4 +1,4 @@
-"""Serial transport: pyserial ports and its URL handlers (loop://, socket://, rfc2217://)."""
+"""Adapt pyserial local ports, in-memory loopback, raw TCP and RFC2217 remote ports to byte-stream I/O."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class SerialTransport:
 
 
 def open_serial(url: str, options: TransportOptions) -> Transport:
-    """Open a serial device transport.
+    """Open a local port or a pyserial URL handler for loopback, raw TCP or RFC2217.
 
     Examples:
         open_serial("COM3", options)

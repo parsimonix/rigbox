@@ -65,6 +65,7 @@ class MessageReceiver:
         self._response: Message | None = None
         self._unresolved = False
         self._error: Exception | None = None
+        self._error_reported = False
         self._ended = False
         self._dropped = 0
         self._dropped_bytes = 0
@@ -216,6 +217,9 @@ class MessageReceiver:
         with self._condition:
             messages = list(self._diagnostics)
             self._diagnostics.clear()
+            if self._error is not None and not self._error_reported:
+                messages.append(self._failure_message())
+                self._error_reported = True
             if self._lost_diagnostics:
                 messages.append(f"{self._lost_diagnostics} older parser diagnostics omitted")
                 self._lost_diagnostics = 0
@@ -231,9 +235,14 @@ class MessageReceiver:
 
     def _check_readable(self) -> None:
         if self._error is not None:
-            raise CommandError(f"continuous reception failed: {self._error}; close and reconnect") from self._error
+            self._error_reported = True
+            raise CommandError(self._failure_message()) from self._error
         if self._ended:
             raise EOFError("end of stream")
+
+    def _failure_message(self) -> str:
+        recovery = "" if isinstance(self._error, CommandError) else "; close and reconnect"
+        return f"continuous reception failed: {self._error}{recovery}"
 
     def _check_sendable(self) -> None:
         self._check_readable()
@@ -298,7 +307,4 @@ class MessageReceiver:
             # A worker failure must reach the foreground caller, never disappear in a thread traceback.
             with self._condition:
                 self._error = error
-                if len(self._diagnostics) == self._diagnostics.maxlen:
-                    self._lost_diagnostics += 1
-                self._diagnostics.append(f"continuous reception failed: {error}; close and reconnect")
                 self._condition.notify_all()

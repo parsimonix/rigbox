@@ -1,4 +1,7 @@
-"""Replay transport: play a `device.capture` file back as if a device were sending it."""
+"""Replay received hex bytes from NDJSON captures in file order, without reproducing recorded timing.
+
+Read records on demand and retain writes in memory; playback does not simulate responses to those writes.
+"""
 
 from __future__ import annotations
 
@@ -90,7 +93,7 @@ class ReplayTransport:
 
 
 def open_replay(url: str, options: TransportOptions) -> Transport:
-    """Open a playback transport to play back a capture file: replay://path/to/capture.ndjson.
+    """Replay captured RX bytes from NDJSON (replay://path); no timing replay or responses to writes.
 
     Args:
         url (str): The replay URL.
