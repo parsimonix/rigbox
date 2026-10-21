@@ -45,9 +45,20 @@ def test_workflow_reports_argument_typo_with_step_context_before_handler_runs() 
         called.append(args.name)
 
     ctx = Context(registry)
-    workflow = Workflow(name="sdk", steps=[Step(run="device.request", args={
-        "name": "dut", "protocol": "race-uart", "frame": "05 5a 02 00 01 03", "playload_format": "ascii",
-    })])
+    workflow = Workflow(
+        name="sdk",
+        steps=[
+            Step(
+                run="device.request",
+                args={
+                    "name": "dut",
+                    "protocol": "race-uart",
+                    "frame": "05 5a 02 00 01 03",
+                    "playload_format": "ascii",
+                },
+            )
+        ],
+    )
     with pytest.raises(CommandError, match=r"workflow 'sdk' failed at step 1 .*playload_format: Extra inputs"):
         run_workflow(ctx, workflow)
     assert called == []
