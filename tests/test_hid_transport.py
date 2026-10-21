@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ class FakeHIDDevice:
         self.reports: list[list[int]] = []
         self.reads: list[tuple[int, int]] = []
         self.writes: list[bytes] = []
+        self.feature_writes: list[bytes] = []
         self.write_result: int | None = None
         self.open_error: OSError | None = None
         self.io_error: OSError | None = None
@@ -80,6 +82,20 @@ class FakeHIDDevice:
         if self.io_error is not None:
             raise self.io_error
         self.writes.append(data)
+        return len(data) if self.write_result is None else self.write_result
+
+    def send_feature_report(self, data: bytes) -> int:
+        """Record a feature report with the same failure controls as output writes.
+
+        Args:
+            data: Complete feature report including its ID.
+
+        Returns:
+            Configured write result or complete report size.
+        """
+        if self.io_error is not None:
+            raise self.io_error
+        self.feature_writes.append(data)
         return len(data) if self.write_result is None else self.write_result
 
     def close(self) -> None:
@@ -139,6 +155,23 @@ def test_write_sends_exactly_one_report_without_retry(device: FakeHIDDevice) -> 
     assert len(device.writes) == 3
 
 
+def test_feature_writes_are_explicit_and_never_fall_back(device: FakeHIDDevice) -> None:
+    transport = make_transport(write_kind="feature")
+    report = b"\x0avr\n\x00"
+    transport.write(report)
+    assert device.feature_writes == [report]
+    assert device.writes == []
+    device.write_result = -1
+    with pytest.raises(OSError, match="incomplete HID write"):
+        transport.write(report)
+    assert device.feature_writes == [report, report]
+    assert device.writes == []
+    device.io_error = OSError("feature unavailable")
+    with pytest.raises(OSError, match="feature unavailable"):
+        transport.write(report)
+    assert device.writes == []
+
+
 def test_close_is_idempotent_and_operations_fail_after_close(device: FakeHIDDevice) -> None:
     transport = make_transport()
     device.reports = [[1, 2]]
@@ -182,6 +215,7 @@ def test_disconnect_errors_propagate(device: FakeHIDDevice) -> None:
         {"path": "device", "read_size": "0"},
         {"path": "device", "read_size": "65537"},
         {"path": "device", "unknown": "1"},
+        {"path": "device", "write_kind": "automatic"},
     ],
 )
 def test_invalid_options_do_not_open_device(device: FakeHIDDevice, params: dict[str, str]) -> None:
@@ -229,6 +263,43 @@ def test_device_commands_use_hid_reports(device: FakeHIDDevice) -> None:
         assert ctx.run("device.expect", {"name": "usb", "size": 2}).structured_data == {"size": 2, "hex": "0200"}
         ctx.run("device.close", {"name": "usb"})
         assert device.close_count == 1
+    finally:
+        ctx.close()
+
+
+def test_tap_commands_use_feature_reports_and_replay_exact_captures(
+    device: FakeHIDDevice, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = Workspace.load(Path(__file__).resolve().parents[1] / "race")
+    registry = Registry()
+    load_all(registry, workspace)
+    interfaces: list[dict[str, object]] = [{"path": b"antwerp-tap", "vendor_id": 0x05A7, "product_id": 0x410A, "usage_page": 0xFF16}]
+    monkeypatch.setattr(hid_catalog.hid, "enumerate", lambda: interfaces)
+    ctx = Context(registry=registry)
+    path = tmp_path / "tap.ndjson"
+    try:
+        ctx.run_line("device.connect usb hid:// --param device=bose.antwerp --param write_kind=feature")
+        assert device.opened == b"antwerp-tap"
+        device.reports = [list(b"\x0fversion fake\x00"), list(b"\x09version 1\r\n\x00\x00")]
+        response = ctx.run_line('device.request usb --protocol tap --text vr --protocol-option "response_pattern=version [0-9]+" --payload-format utf8')
+        assert response.structured_data == {"metadata": {"report_id": 9}, "payload": {"size": 11, "text": "version 1\r\n"}}
+        assert "TAP skipped 1 non-TAP HID report(s) with ID 0x0f" in capsys.readouterr().err
+        assert device.feature_writes == [b"\x0avr\n" + bytes(61)]
+        assert device.writes == []
+        reports = [b"\x09log one\n\x00", b"\x09log two\n\x00\x00"]
+        device.reports = [list(report) for report in reports]
+        ctx.run("device.capture", {"name": "usb", "protocol": "tap", "count": 2, "out": str(path)})
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        assert [record["hex"] for record in records] == [report.hex() for report in reports]
+        assert [record["payload_hex"] for record in records] == [b"log one\n".hex(), b"log two\n".hex()]
+        ctx.run_line("device.close usb")
+        ctx.run("device.connect", {"name": "recording", "url": f"replay://{path}"})
+        for text in ("log one\n", "log two\n"):
+            result = ctx.run_line("device.expect recording --protocol tap-hid --payload-format utf8")
+            assert result.structured_data == {"metadata": {"report_id": 9}, "payload": {"size": len(text), "text": text}}
+        ctx.run_line("device.connect console loop://")
+        result = ctx.run_line('device.request console --protocol tap --text vr --protocol-option "response_pattern=^vr$" --payload-format utf8')
+        assert result.structured_data == {"size": 2, "text": "vr"}
     finally:
         ctx.close()
 

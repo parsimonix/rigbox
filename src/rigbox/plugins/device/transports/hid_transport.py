@@ -1,6 +1,6 @@
 """Adapt explicit HIDAPI reports to byte-stream reads without removing report IDs or padding.
 
-Each write is one complete output report, including its report-ID byte (zero for unnumbered reports).
+Each write is one complete output or explicitly selected feature report, including its report-ID byte.
 Reads retain exactly HIDAPI's input bytes: numbered reports include their ID, unnumbered reports do not.
 Partial reads buffer the remainder of a report; separate reports are not combined by a single transport read.
 """
@@ -18,7 +18,7 @@ from rigbox.plugins.device.transport import Transport, TransportOptions
 
 
 class HIDTransport:
-    """Send explicit output reports and retain all input bytes through HIDAPI.
+    """Send explicit output or feature reports and retain all input bytes through HIDAPI.
 
     HIDAPI does not expose a write timeout in this binding. Writes are neither padded, split nor retried;
     callers must supply report sizes and IDs appropriate for their device.
@@ -35,6 +35,7 @@ class HIDTransport:
                 ``serial_number`` selects a particular device. Alternatively, supply ``path`` alone.
                 ``read_size`` sets the maximum complete input report size, including any report ID,
                 and defaults to 65536. It must not be smaller than the device's largest input report.
+                ``write_kind`` selects ``output`` (default) or ``feature`` for every write.
 
         Raises:
             CommandError: If options are invalid or the device cannot be opened.
@@ -44,9 +45,12 @@ class HIDTransport:
         if options.write_timeout_s is not None:
             raise CommandError("HIDAPI does not support --write-timeout")
         params = options.params
-        unknown = params.keys() - {"vendor_id", "product_id", "serial_number", "path", "read_size"}
+        unknown = params.keys() - {"vendor_id", "product_id", "serial_number", "path", "read_size", "write_kind"}
         if unknown:
             raise CommandError(f"unknown HID parameter(s): {', '.join(sorted(unknown))}")
+        self._write_kind = params.get("write_kind", "output")
+        if self._write_kind not in {"output", "feature"}:
+            raise CommandError("HID write_kind must be output or feature")
         self.vendor_id: int | None = None
         self.product_id: int | None = None
         self._device: hid.device | None = None
@@ -79,7 +83,7 @@ class HIDTransport:
         """Send one report, including its report ID, without padding, splitting or retrying.
 
         Args:
-            data: Complete output report; use a zero first byte for an unnumbered report.
+            data: Complete report; use a zero first byte for an unnumbered report.
 
         Raises:
             OSError: If closed, the write fails, or HIDAPI accepts fewer bytes than supplied.
@@ -87,7 +91,7 @@ class HIDTransport:
         device = self._open_device()
         if not data:
             return
-        written = device.write(data)
+        written = device.send_feature_report(data) if self._write_kind == "feature" else device.write(data)
         if written != len(data):
             raise OSError(f"incomplete HID write: {written} of {len(data)} bytes")
 
